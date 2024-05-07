@@ -1,0 +1,22 @@
+name: Build Nextcloud
+
+on:
+  workflow_dispatch:
+    inputs:
+      nextcloud-version:
+        description: 'Nextcloud Docker version to use'
+        required: true
+        type: string
+        default: 'fpm-alpine'
+
+jobs:
+  build:
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+    uses: ./.github/workflows/template.yaml
+    with:
+      context: nextcloud
+      tags: ${{ inputs.nextcloud-version }}
+      build-args: "TAG=${{ inputs.nextcloud-version }}"
