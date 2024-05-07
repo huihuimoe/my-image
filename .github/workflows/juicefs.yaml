@@ -1,0 +1,18 @@
+name: Build JuiceFS
+
+on:
+  workflow_dispatch:
+    inputs:
+      juicefs-version:
+        description: 'JuiceFS version to use'
+        required: true
+        type: string
+        default: '1.1.1'
+
+jobs:
+  build:
+    uses: ./.github/workflows/template.yaml
+    with:
+      context: juicefs
+      tags: ${{ inputs.juicefs-version }}
+      build-args: "JUICEFS_VERSION=${{ inputs.juicefs-version }}"
