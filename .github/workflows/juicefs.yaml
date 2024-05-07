@@ -20,4 +20,5 @@ jobs:
     with:
       context: juicefs
       tags: ${{ inputs.juicefs-version }}
-      build-args: "JUICEFS_VERSION=${{ inputs.juicefs-version }}"
+      build-args: "VERSION=${{ inputs.juicefs-version }}"
+      platforms: linux/amd64,linux/arm64
