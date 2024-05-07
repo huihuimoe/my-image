@@ -11,4 +11,4 @@ RUN apk add --no-cache fuse bash && \
     mv temp/juicefs /usr/local/bin/juicefs && \
     rm -rf temp
 
-RUN juicefs version
+CMD ["juicefs", "version"]
