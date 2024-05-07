@@ -34,6 +34,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write
       attestations: write
     steps:
       - name: Checkout repository
@@ -55,13 +56,14 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: ${{ inputs.tags }}
       - name: Build and push Docker image
         id: push
         uses: docker/build-push-action@v5
         with:
           context: ${{ inputs.context }}
           push: true
-          tags: ${{ inputs.tags }}
+          tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: ${{ inputs.build-args }}
           platforms: ${{ inputs.platforms }}
