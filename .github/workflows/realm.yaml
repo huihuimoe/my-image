@@ -1,0 +1,24 @@
+name: Build realm
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'realm version to use'
+        required: true
+        type: string
+        default: '2.6.0'
+
+jobs:
+  build:
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/template.yaml
+    with:
+      context: realm
+      tags: ${{ inputs.version }}
+      build-args: "VERSION=${{ inputs.version }}"
+      platforms: linux/amd64,linux/arm64
