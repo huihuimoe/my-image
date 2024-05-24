@@ -1,0 +1,39 @@
+name: Build nginx
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'nginx tag to use'
+        required: true
+        type: string
+        default: 'v20240516'
+      version:
+        description: 'nginx version to use'
+        required: true
+        type: string
+        default: '1.27.0'
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        env:
+          - Name: nginx-huihui
+            SSL: openssl
+          - Name: nginx-boringssl-huihui
+            SSL: boringssl
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/template.yaml
+    with:
+      context: nginx
+      tags: ${{ inputs.version }}-${{ matrix.env.SSL }}
+      build-args: |
+        TAG=${{ inputs.tag }}
+        VERSION=${{ inputs.version }}
+        APP=${{ matrix.env.Name }}
+      platforms: linux/amd64,linux/arm64
