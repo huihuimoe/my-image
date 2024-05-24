@@ -23,7 +23,9 @@ RUN apt-get update && \
     rm -rf temp_download *.deb usr/share/doc usr/lib/systemd etc/nginx/*.default && \
     sed -i '1s/^/user nonroot nonroot;/' etc/nginx/nginx.conf && \
     # @TODO delete it
-    sed -i 's/geoip_country/#geoip_country/' etc/nginx/nginx.conf
+    sed -i 's/geoip_country/#geoip_country/' etc/nginx/nginx.conf && \
+    sed -i 's/geoip_city/#geoip_city/' etc/nginx/nginx.conf && \
+    sed -i 's/geoip_org/#geoip_org/' etc/nginx/nginx.conf
     # @TODO add some include or init script
 
 FROM scratch
