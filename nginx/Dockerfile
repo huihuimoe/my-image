@@ -16,6 +16,8 @@ RUN apt-get update && \
     chmod 777 temp_download && \
     cd temp_download && \
     apt-get download libaudit1 libpam0g libcap-ng0 libgcc-s1 && \
+    # if APP contains boringssl, download libstdc++6
+    if [ $(echo ${APP} | grep -c boringssl) -eq 1 ]; then apt-get download libstdc++6; fi && \
     mv *.deb /build && \
     cd /build && \
     wget -q https://github.com/huihuimoe/my-scripts/releases/download/${TAG}/${APP}_${VERSION}_${TARGETARCH}.deb && \
