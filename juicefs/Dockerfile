@@ -4,7 +4,7 @@ ARG VERSION=1.1.1
 ARG TARGETOS=linux
 ARG TARGETARCH=amd64
 
-RUN apk add --no-cache fuse bash && \
+RUN apk add --no-cache fuse bash ca-certificates-bundle && \
     mkdir temp && \
     wget https://github.com/juicedata/juicefs/releases/download/v${VERSION}/juicefs-${VERSION}-${TARGETOS}-${TARGETARCH}.tar.gz -O temp/j.tar.gz && \
     tar xf temp/j.tar.gz -C temp && \
