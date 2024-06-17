@@ -15,7 +15,7 @@ RUN apt-get update && \
     mkdir temp_download && \
     chmod 777 temp_download && \
     cd temp_download && \
-    apt-get download libaudit1 libpam0g libcap-ng0 libgcc-s1 && \
+    apt-get download libgcc-s1 && \
     # if APP contains boringssl, download libstdc++6
     if [ $(echo ${APP} | grep -c boringssl) -eq 1 ]; then apt-get download libstdc++6; fi && \
     mv *.deb /build && \
@@ -23,11 +23,7 @@ RUN apt-get update && \
     wget -q https://github.com/huihuimoe/my-scripts/releases/download/${TAG}/${APP}_${VERSION}_${TARGETARCH}.deb && \
     find . -name "*.deb" -exec dpkg -x {} . \; && \
     rm -rf temp_download *.deb usr/share/doc usr/lib/systemd etc/nginx/*.default && \
-    sed -i '1s/^/user nonroot nonroot;/' etc/nginx/nginx.conf && \
-    # @TODO delete it
-    sed -i 's/geoip_country/#geoip_country/' etc/nginx/nginx.conf && \
-    sed -i 's/geoip_city/#geoip_city/' etc/nginx/nginx.conf && \
-    sed -i 's/geoip_org/#geoip_org/' etc/nginx/nginx.conf
+    sed -i '1s/^/user nonroot nonroot;/' etc/nginx/nginx.conf
     # @TODO add some include or init script
 
 FROM scratch
