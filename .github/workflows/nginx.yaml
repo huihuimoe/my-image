@@ -23,6 +23,8 @@ jobs:
             SSL: openssl
           - Name: nginx-boringssl-huihui
             SSL: boringssl
+          - Name: nginx-awslc-huihui
+            SSL: awslc
     permissions:
       contents: read
       packages: write
