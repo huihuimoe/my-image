@@ -21,6 +21,11 @@ on:
         type: string
         required: false
         default: ''
+      pre-build-docker-hook:
+        description: 'Path to a script to run before building the Docker image'
+        type: string
+        required: false
+        default: ''
 
 # Defines two custom environment variables for the workflow. These are used for the Container registry domain, and a name for the Docker image that this workflow builds.
 env:
@@ -39,6 +44,11 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+      - name: Run pre-build Docker hook
+        if: inputs.pre-build-docker-hook != ''
+        run: |
+          echo "Running pre-build Docker hook"
+          eval ${{ inputs.pre-build-docker-hook }}
       - name: Set up QEMU
         if: inputs.platforms != ''
         uses: docker/setup-qemu-action@v3

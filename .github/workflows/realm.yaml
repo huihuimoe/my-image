@@ -20,5 +20,6 @@ jobs:
     with:
       context: realm
       tags: ${{ inputs.version }}
+      pre-build-docker-hook: "./realm/build-binary.sh ${{ inputs.version }}"
       build-args: "VERSION=${{ inputs.version }}"
       platforms: linux/amd64,linux/arm64
