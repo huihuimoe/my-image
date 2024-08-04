@@ -1,0 +1,23 @@
+name: Build Sing-box with GOAMD64=v3
+
+on:
+  workflow_dispatch:
+    inputs:
+      sing-box-version:
+        description: 'sing-box version to use'
+        required: true
+        type: string
+        default: '1.0.0'
+
+jobs:
+  build:
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/template.yaml
+    with:
+      context: sing-box
+      tags: ${{ inputs.sing-box-version }}
+      build-args: "VERSION=${{ inputs.sing-box-version }}"

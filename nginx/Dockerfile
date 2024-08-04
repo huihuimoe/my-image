@@ -1,5 +1,5 @@
 # https://github.com/huihuimoe/my-scripts/releases
-FROM debian:bookworm-slim as builder
+FROM debian:bookworm-slim AS builder
 ARG TAG=v20240516
 ARG VERSION=1.27.0
 ARG APP=nginx-huihui
