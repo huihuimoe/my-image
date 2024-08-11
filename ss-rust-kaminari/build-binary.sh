@@ -36,7 +36,7 @@ for short_target in ${TARGET[@]}; do
   target="${short_target}-unknown-linux-gnu"
   cross build --target $target \
               --no-default-features \
-              --features 'basic, mimalloc, local-tunnel, aead-cipher-2022' \
+              --features 'basic, mimalloc, local-tunnel, aead-cipher-2022, local-online-config' \
               --release
   if [[ $short_target == "x86_64" ]]; then
     arch=amd64
