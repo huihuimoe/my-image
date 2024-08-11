@@ -36,7 +36,7 @@ mkdir -p ../dist
 
 for short_target in ${TARGET[@]}; do
   target="${short_target}-unknown-linux-gnu"
-  cross build --release --target $target --features 'jemalloc'
+  cross build --release --target $target --features 'mi-malloc'
 
   if [[ $short_target == "x86_64" ]]; then
     cp target/$target/release/realm ../dist/realm-amd64

@@ -6,6 +6,6 @@ ARG TARGETARCH
 COPY --chmod=755 dist/realm-${TARGETARCH} /usr/bin/realm
 
 # change user from 65532(nonroot) to 0(root)
-USER root
+# USER root
 ENTRYPOINT [ "/usr/bin/realm" ]
 CMD ["-v"]

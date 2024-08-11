@@ -1,0 +1,29 @@
+name: Build ss-rust-kaminari
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'shadowsocks-rust version to use'
+        required: true
+        type: string
+        default: '1.20.3'
+      kaminari-version:
+        description: 'kaminari version to use'
+        required: false
+        type: string
+        default: '0.5.7'
+
+jobs:
+  build:
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/template.yaml
+    with:
+      context: ss-rust-kaminari
+      tags: v${{ inputs.version }}
+      pre-build-docker-hook: "./ss-rust-kaminari/build-binary.sh ${{ inputs.version }} ${{ inputs.kaminari-version }}"
+      platforms: linux/amd64,linux/arm64

@@ -19,7 +19,6 @@ jobs:
     uses: ./.github/workflows/template.yaml
     with:
       context: realm
-      tags: ${{ inputs.version }}
+      tags: v${{ inputs.version }}
       pre-build-docker-hook: "./realm/build-binary.sh ${{ inputs.version }}"
-      build-args: "VERSION=${{ inputs.version }}"
       platforms: linux/amd64,linux/arm64
