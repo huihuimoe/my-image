@@ -19,5 +19,5 @@ jobs:
     uses: ./.github/workflows/template.yaml
     with:
       context: sing-box
-      tags: ${{ inputs.sing-box-version }}
+      tags: v${{ inputs.sing-box-version }}
       build-args: "VERSION=${{ inputs.sing-box-version }}"
