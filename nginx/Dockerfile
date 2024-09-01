@@ -3,8 +3,8 @@ FROM debian:bookworm-slim AS builder
 ARG TAG=v20240516
 ARG VERSION=1.27.0
 ARG APP=nginx-huihui
-ARG TARGETOS=linux
-ARG TARGETARCH=amd64
+ARG TARGETOS
+ARG TARGETARCH
 
 # only support linux and amd64/arm64 now
 COPY --from=gcr.io/distroless/base-nossl / /build

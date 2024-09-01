@@ -1,8 +1,8 @@
 # https://github.com/SagerNet/sing-box/releases
 FROM alpine
 ARG VERSION
-ARG TARGETOS=linux
-ARG TARGETARCH=amd64
+ARG TARGETOS
+ARG TARGETARCH
 # https://github.com/SagerNet/sing-box/blob/dev-next/Dockerfile
 RUN set -ex && \
     apk add --no-cache ca-certificates-bundle && \

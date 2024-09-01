@@ -1,8 +1,8 @@
 # https://github.com/juicedata/juicefs/releases
 FROM alpine
 ARG VERSION=1.1.1
-ARG TARGETOS=linux
-ARG TARGETARCH=amd64
+ARG TARGETOS
+ARG TARGETARCH
 
 RUN apk add --no-cache fuse bash ca-certificates-bundle && \
     mkdir temp && \
