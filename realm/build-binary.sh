@@ -34,6 +34,11 @@ TARGET=(
 
 mkdir -p ../dist
 
+# https://rust-lang.github.io/packed_simd/perf-guide/target-feature/rustflags.html
+# build for x64-v3 and armv8-a
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS='-C target-cpu=x86-64-v3'
+export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS='-C target-cpu=cortex-a53'
+
 for short_target in ${TARGET[@]}; do
   target="${short_target}-unknown-linux-gnu"
   cross build --release --target $target --features 'mi-malloc'
