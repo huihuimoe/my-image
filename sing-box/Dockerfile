@@ -1,16 +1,15 @@
 # https://github.com/SagerNet/sing-box/releases
-FROM alpine
+
+FROM docker.io/library/golang:alpine AS builder
 ARG VERSION
 ARG TARGETOS
 ARG TARGETARCH
-# https://github.com/SagerNet/sing-box/blob/dev-next/Dockerfile
 RUN set -ex && \
-    apk add --no-cache ca-certificates-bundle && \
-    mkdir temp && \
-    wget https://github.com/SagerNet/sing-box/releases/download/v${VERSION}/sing-box-${VERSION}-${TARGETOS}-amd64v3.tar.gz \
-        -O temp/bin.tar.gz && \
-    tar xf temp/bin.tar.gz -C temp && \
-    mv temp/sing-box-${VERSION}-${TARGETOS}-amd64v3/sing-box /usr/local/bin/sing-box && \
-    rm -rf temp
+    apk add --no-cache git git-lfs make && \
+    git clone --depth=1 https://github.com/SagerNet/sing-box -b v${VERSION} && \
+    cd sing-box && \
+    env GOOS=${TARGETOS} GOARCH=${TARGETARCH} GOAMD64=v3 make build
 
+FROM docker.io/library/alpine
+COPY --from=builder /go/sing-box/sing-box /usr/local/bin/
 ENTRYPOINT ["sing-box"]
