@@ -1,5 +1,5 @@
 #!/bin/bash
-set -e
+set -ex
 
 cd $(dirname $0)
 
@@ -20,9 +20,11 @@ if [[ -d realm-src ]]; then
   git fetch --unshallow || true
   git fetch --all
   git reset --hard v$VERSION
+  patch -p1 < ../dns-retry-once.patch
 else
   git clone https://github.com/zhboner/realm -b v$VERSION --depth=1 realm-src
   cd realm-src
+  patch -p1 < ../dns-retry-once.patch
 fi
 
 cp ../Cross.toml Cross.toml

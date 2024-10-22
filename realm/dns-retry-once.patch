@@ -1,0 +1,27 @@
+diff --git a/realm_core/src/dns/mod.rs b/realm_core/src/dns/mod.rs
+index bc61429..8b3d4b5 100644
+--- a/realm_core/src/dns/mod.rs
++++ b/realm_core/src/dns/mod.rs
+@@ -83,9 +83,19 @@ pub fn build_lazy(conf: Option<ResolverConfig>, opts: Option<ResolverOpts>) {
+ /// Lookup ip with global dns resolver.
+ pub async fn resolve_ip(ip: &str) -> Result<LookupIp> {
+     unsafe {
+-        DNS.lookup_ip(ip)
+-            .await
+-            .map_or_else(|e| Err(Error::new(ErrorKind::Other, e)), Ok)
++        match DNS.lookup_ip(ip).await {
++            Ok(res) => Ok(res),
++            Err(e) => match e.kind() {
++                // clear cache and retry once
++                hickory_resolver::error::ResolveErrorKind::NoRecordsFound { .. } => {
++                    DNS.clear_cache();
++                    DNS.lookup_ip(ip)
++                        .await
++                        .map_or_else(|e| Err(Error::new(ErrorKind::Other, e)), Ok)
++                }
++                _ => Err(Error::new(ErrorKind::Other, e)),
++            },
++        }
+     }
+ }
+ 
