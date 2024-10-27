@@ -19,7 +19,8 @@ ARG TARGETOS
 ARG TARGETARCH
 RUN set -ex && \
     cd /go/juicefs && \
-    env STATIC=1 CGO_ENABLED=1 \
+    env CC=x86_64-linux-gnu-gcc \
+        CGO_ENABLED=1 \
         GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
         GOAMD64=v3 \
         make juicefs.lite
@@ -36,8 +37,7 @@ RUN set -ex && \
 
 FROM --platform=$BUILDPLATFORM builder-${TARGETARCH} AS builder
 
-FROM alpine
+FROM localhost/juicefs-base:latest-${TARGETARCH}
 ARG TARGETARCH
 COPY --from=builder /go/juicefs/juicefs.lite /usr/local/bin/juicefs
-RUN apk add --no-cache fuse bash ca-certificates-bundle
 CMD ["juicefs", "version"]

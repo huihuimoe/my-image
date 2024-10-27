@@ -18,6 +18,7 @@ jobs:
       attestations: write
     uses: ./.github/workflows/template.yaml
     with:
+      pre-build-docker-hook: "./juicefs-lite/build-base-image.sh"
       context: juicefs-lite
       tags: ${{ inputs.juicefs-version }}
       build-args: "VERSION=${{ inputs.juicefs-version }}"
