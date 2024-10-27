@@ -37,7 +37,7 @@ RUN set -ex && \
 
 FROM --platform=$BUILDPLATFORM builder-${TARGETARCH} AS builder
 
-FROM localhost/juicefs-base:latest-${TARGETARCH}
+FROM localhost:5000/juicefs-base:latest-${TARGETARCH}
 ARG TARGETARCH
 COPY --from=builder /go/juicefs/juicefs.lite /usr/local/bin/juicefs
 CMD ["juicefs", "version"]
