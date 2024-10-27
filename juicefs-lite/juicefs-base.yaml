@@ -7,7 +7,7 @@ contents:
     - wolfi-baselayout
     - ca-certificates-bundle
     - glibc
-    - fuse3
+    - fuse2
     - busybox
 
 cmd: /bin/sh -l
