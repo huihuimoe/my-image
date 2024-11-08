@@ -11,7 +11,7 @@ RUN set -ex && \
     # enable badger
     sed -i 's/,nobadger//' Makefile && \
     # fixing build error on old github.com/grafana/pyroscope-go
-    go get -v github.com/grafana/pyroscope-go && \
+    # go get -v github.com/grafana/pyroscope-go && \
     go mod tidy
 
 FROM --platform=$BUILDPLATFORM base AS builder-amd64

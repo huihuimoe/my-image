@@ -1,0 +1,271 @@
+diff --git a/realm_core/Cargo.toml b/realm_core/Cargo.toml
+index c5cf0d9..72f8af0 100644
+--- a/realm_core/Cargo.toml
++++ b/realm_core/Cargo.toml
+@@ -13,7 +13,7 @@ license = "MIT"
+ [dependencies]
+ # realm
+ realm_io = { version = "0.5" }
+-realm_syscall = "0.1"
++realm_syscall = { path = "../realm_syscall" }
+ realm_hook = { version = "0.1", optional = true }
+ realm_lb = { version = "0.1", optional = true }
+ kaminari = { version = "0.12", features = ["ws", "tls", "mix"], optional = true }
+diff --git a/realm_core/src/endpoint.rs b/realm_core/src/endpoint.rs
+index fefb7f4..6fc2630 100644
+--- a/realm_core/src/endpoint.rs
++++ b/realm_core/src/endpoint.rs
+@@ -43,6 +43,7 @@ pub struct ConnectOpts {
+     pub tcp_keepalive_probe: usize,
+     pub bind_address: Option<SocketAddr>,
+     pub bind_interface: Option<String>,
++    pub conn_mptcp: bool,
+ 
+     #[cfg(feature = "proxy")]
+     pub proxy_opts: ProxyOpts,
+@@ -57,6 +58,7 @@ pub struct ConnectOpts {
+ #[derive(Debug, Default, Clone)]
+ pub struct BindOpts {
+     pub ipv6_only: bool,
++    pub listen_mptcp: bool,
+ }
+ 
+ /// Relay endpoint.
+@@ -93,8 +95,8 @@ impl Display for Endpoint {
+ 
+ impl Display for BindOpts {
+     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+-        let BindOpts { ipv6_only } = self;
+-        write!(f, "ipv6_only={}", ipv6_only)
++        let BindOpts { ipv6_only, listen_mptcp } = self;
++        write!(f, "ipv6_only={}, listen_mptcp={}", ipv6_only, listen_mptcp)
+     }
+ }
+ 
+@@ -107,6 +109,7 @@ impl Display for ConnectOpts {
+             tcp_keepalive_probe,
+             bind_address,
+             bind_interface,
++            conn_mptcp,
+ 
+             #[cfg(feature = "proxy")]
+             proxy_opts,
+@@ -136,8 +139,8 @@ impl Display for ConnectOpts {
+             } = proxy_opts;
+             write!(
+                 f,
+-                "send-proxy={0}, send-proxy-version={2}, accept-proxy={1}, accept-proxy-timeout={3}s; ",
+-                send_proxy, accept_proxy, send_proxy_version, accept_proxy_timeout
++                "send-proxy={0}, send-proxy-version={2}, accept-proxy={1}, accept-proxy-timeout={3}s, conn-mptcp={4}; ",
++                send_proxy, accept_proxy, send_proxy_version, accept_proxy_timeout, conn_mptcp
+             )?;
+         }
+ 
+diff --git a/realm_core/src/tcp/socket.rs b/realm_core/src/tcp/socket.rs
+index a4ef781..6e6e459 100644
+--- a/realm_core/src/tcp/socket.rs
++++ b/realm_core/src/tcp/socket.rs
+@@ -3,6 +3,7 @@ use std::net::SocketAddr;
+ use std::time::Duration;
+ 
+ use realm_syscall::new_tcp_socket;
++use realm_syscall::new_tcp_socket_mptcp;
+ use tokio::net::{TcpSocket, TcpStream, TcpListener};
+ 
+ use crate::dns::resolve_addr;
+@@ -10,7 +11,14 @@ use crate::time::timeoutfut;
+ use crate::endpoint::{RemoteAddr, BindOpts, ConnectOpts};
+ 
+ pub fn bind(laddr: &SocketAddr, bind_opts: BindOpts) -> Result<TcpListener> {
+-    let BindOpts { ipv6_only } = bind_opts;
++    let BindOpts { ipv6_only, listen_mptcp } = bind_opts;
++    #[cfg(target_os = "linux")]
++    let socket = if listen_mptcp {
++        new_tcp_socket_mptcp(laddr)?
++    } else {
++        new_tcp_socket(laddr)?
++    };
++    #[cfg(not(target_os = "linux"))]
+     let socket = new_tcp_socket(laddr)?;
+ 
+     // ipv6_only
+@@ -34,6 +42,8 @@ pub async fn connect(raddr: &RemoteAddr, conn_opts: &ConnectOpts) -> Result<TcpS
+ 
+         #[cfg(target_os = "linux")]
+         bind_interface,
++        #[cfg(target_os = "linux")]
++        conn_mptcp,
+         ..
+     } = conn_opts;
+ 
+@@ -43,6 +53,13 @@ pub async fn connect(raddr: &RemoteAddr, conn_opts: &ConnectOpts) -> Result<TcpS
+     for addr in resolve_addr(raddr).await?.iter() {
+         log::debug!("[tcp]{} resolved as {}", raddr, &addr);
+ 
++        #[cfg(target_os = "linux")]
++        let socket = if *conn_mptcp {
++            new_tcp_socket_mptcp(&addr)?
++        } else {
++            new_tcp_socket(&addr)?
++        };
++        #[cfg(not(target_os = "linux"))]
+         let socket = new_tcp_socket(&addr)?;
+ 
+         // ignore error
+diff --git a/realm_core/src/udp/socket.rs b/realm_core/src/udp/socket.rs
+index 492842d..a40a970 100644
+--- a/realm_core/src/udp/socket.rs
++++ b/realm_core/src/udp/socket.rs
+@@ -7,7 +7,7 @@ use realm_syscall::new_udp_socket;
+ use crate::endpoint::{BindOpts, ConnectOpts};
+ 
+ pub fn bind(laddr: &SocketAddr, bind_opts: BindOpts) -> Result<UdpSocket> {
+-    let BindOpts { ipv6_only } = bind_opts;
++    let BindOpts { ipv6_only, listen_mptcp: _ } = bind_opts;
+     let socket = new_udp_socket(laddr)?;
+ 
+     // ipv6_only
+diff --git a/realm_syscall/src/socket.rs b/realm_syscall/src/socket.rs
+index 1d04706..3d672af 100644
+--- a/realm_syscall/src/socket.rs
++++ b/realm_syscall/src/socket.rs
+@@ -67,6 +67,31 @@ pub fn new_tcp_socket(addr: &SocketAddr) -> Result<Socket> {
+     new_socket(domain, Type::STREAM)
+ }
+ 
++#[cfg(target_os = "linux")]
++#[inline]
++pub fn new_tcp_socket_mptcp(addr: &SocketAddr) -> Result<Socket> {
++    use std::os::unix::prelude::FromRawFd;
++    use libc::{SOCK_NONBLOCK, SOCK_CLOEXEC, IPPROTO_MPTCP};
++    let domain = match addr {
++        SocketAddr::V4(..) => Domain::IPV4,
++        SocketAddr::V6(..) => Domain::IPV6,
++    };
++
++    let fd = unsafe {
++        libc::socket(
++            domain.into(),
++            libc::c_int::from(Type::STREAM) | SOCK_NONBLOCK | SOCK_CLOEXEC,
++            IPPROTO_MPTCP,
++        )
++    };
++
++    if fd < 0 {
++        Err(std::io::Error::last_os_error())
++    } else {
++        Ok(unsafe { Socket::from_raw_fd(fd) })
++    }
++}
++
+ /// Create a new non-blocking UDP socket.
+ ///
+ /// On unix-like platforms, [`SOCK_NONBLOCK`](libc::SOCK_NONBLOCK) and
+diff --git a/src/cmd/flag.rs b/src/cmd/flag.rs
+index 7a22e6c..ab28c4e 100644
+--- a/src/cmd/flag.rs
++++ b/src/cmd/flag.rs
+@@ -58,6 +58,16 @@ pub fn add_flags(app: Command) -> Command {
+             .help("force enable tcp zero copy -- deprecated")
+             .action(ArgAction::SetTrue)
+             .display_order(7),
++        Arg::new("listen_mptcp")
++            .long("listen-mptcp")
++            .help("listen_mptcp")
++            .action(ArgAction::SetTrue)
++            .display_order(8),
++        Arg::new("conn_mptcp")
++            .long("conn-mptcp")
++            .help("conn_mptcp")
++            .action(ArgAction::SetTrue)
++            .display_order(9),
+     ])
+ }
+ 
+diff --git a/src/conf/net.rs b/src/conf/net.rs
+index 08a680c..4f4e91a 100644
+--- a/src/conf/net.rs
++++ b/src/conf/net.rs
+@@ -21,6 +21,14 @@ pub struct NetConf {
+     #[serde(skip_serializing_if = "Option::is_none")]
+     pub ipv6_only: Option<bool>,
+ 
++    #[serde(default)]
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub listen_mptcp: Option<bool>,
++
++    #[serde(default)]
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub conn_mptcp: Option<bool>,
++
+     #[serde(default)]
+     #[serde(skip_serializing_if = "Option::is_none")]
+     pub send_proxy: Option<bool>,
+@@ -68,7 +76,8 @@ impl Config for NetConf {
+         crate::empty![self =>
+             no_tcp, use_udp, ipv6_only,
+             send_proxy, accept_proxy, send_proxy_version, accept_proxy_timeout,
+-            tcp_keepalive, tcp_keepalive_probe, tcp_timeout, udp_timeout
++            tcp_keepalive, tcp_keepalive_probe, tcp_timeout, udp_timeout,
++            conn_mptcp, listen_mptcp
+         ]
+     }
+ 
+@@ -85,17 +94,20 @@ impl Config for NetConf {
+         let no_tcp = unbox!(no_tcp);
+         let use_udp = unbox!(use_udp);
+         let ipv6_only = unbox!(ipv6_only);
++        let listen_mptcp = unbox!(listen_mptcp);
++        let conn_mptcp = unbox!(conn_mptcp);
+         let tcp_kpa = unbox!(tcp_keepalive, TCP_KEEPALIVE);
+         let tcp_kpa_probe = unbox!(tcp_keepalive_probe, TCP_KEEPALIVE_PROBE);
+         let tcp_timeout = unbox!(tcp_timeout, TCP_TIMEOUT);
+         let udp_timeout = unbox!(udp_timeout, UDP_TIMEOUT);
+ 
+-        let bind_opts = BindOpts { ipv6_only };
++        let bind_opts = BindOpts { ipv6_only, listen_mptcp };
+         let conn_opts = ConnectOpts {
+             tcp_keepalive: tcp_kpa,
+             tcp_keepalive_probe: tcp_kpa_probe,
+             connect_timeout: tcp_timeout,
+             associate_timeout: udp_timeout,
++            conn_mptcp,
+ 
+             // from endpoint
+             bind_address: None,
+@@ -138,6 +150,8 @@ impl Config for NetConf {
+         rst!(self, no_tcp, other);
+         rst!(self, use_udp, other);
+         rst!(self, ipv6_only, other);
++        rst!(self, listen_mptcp, other);
++        rst!(self, conn_mptcp, other);
+         rst!(self, tcp_keepalive, other);
+         rst!(self, tcp_keepalive_probe, other);
+         rst!(self, tcp_timeout, other);
+@@ -156,6 +170,8 @@ impl Config for NetConf {
+         take!(self, no_tcp, other);
+         take!(self, use_udp, other);
+         take!(self, ipv6_only, other);
++        take!(self, listen_mptcp, other);
++        take!(self, conn_mptcp, other);
+         take!(self, tcp_keepalive, other);
+         take!(self, tcp_keepalive_probe, other);
+         take!(self, tcp_timeout, other);
+@@ -184,6 +200,8 @@ impl Config for NetConf {
+         let no_tcp = unpack!("no_tcp");
+         let use_udp = unpack!("use_udp");
+         let ipv6_only = unpack!("ipv6_only");
++        let listen_mptcp = unpack!("listen_mptcp");
++        let conn_mptcp = unpack!("conn_mptcp");
+ 
+         let tcp_keepalive = unpack!("tcp_keepalive", usize);
+         let tcp_keepalive_probe = unpack!("tcp_keepalive", usize);
+@@ -200,6 +218,8 @@ impl Config for NetConf {
+             no_tcp,
+             use_udp,
+             ipv6_only,
++            listen_mptcp,
++            conn_mptcp,
+             tcp_keepalive,
+             tcp_keepalive_probe,
+             tcp_timeout,
