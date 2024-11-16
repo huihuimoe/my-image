@@ -23,11 +23,13 @@ if [[ -d realm-src ]]; then
   git reset --hard v$VERSION
   patch -p1 < ../01.dns-retry-once.patch
   patch -p1 < ../02.mptcp.patch
+  patch -p1 < ../03.timeout_float.patch
 else
   git clone https://github.com/zhboner/realm -b v$VERSION --depth=1 realm-src
   cd realm-src
   patch -p1 < ../01.dns-retry-once.patch
   patch -p1 < ../02.mptcp.patch
+  patch -p1 < ../03.timeout_float.patch
 fi
 
 cp ../Cross.toml Cross.toml

@@ -1,0 +1,183 @@
+diff --git a/realm_core/src/endpoint.rs b/realm_core/src/endpoint.rs
+index 6fc2630..a67f19d 100644
+--- a/realm_core/src/endpoint.rs
++++ b/realm_core/src/endpoint.rs
+@@ -23,7 +23,7 @@ pub struct ProxyOpts {
+     pub send_proxy: bool,
+     pub accept_proxy: bool,
+     pub send_proxy_version: usize,
+-    pub accept_proxy_timeout: usize,
++    pub accept_proxy_timeout: f32,
+ }
+ 
+ #[cfg(feature = "proxy")]
+@@ -37,9 +37,9 @@ impl ProxyOpts {
+ /// Connect or associate options.
+ #[derive(Debug, Default, Clone)]
+ pub struct ConnectOpts {
+-    pub connect_timeout: usize,
+-    pub associate_timeout: usize,
+-    pub tcp_keepalive: usize,
++    pub connect_timeout: f32,
++    pub associate_timeout: f32,
++    pub tcp_keepalive: f32,
+     pub tcp_keepalive_probe: usize,
+     pub bind_address: Option<SocketAddr>,
+     pub bind_interface: Option<String>,
+diff --git a/realm_core/src/tcp/socket.rs b/realm_core/src/tcp/socket.rs
+index 6e6e459..994f2e9 100644
+--- a/realm_core/src/tcp/socket.rs
++++ b/realm_core/src/tcp/socket.rs
+@@ -106,10 +106,10 @@ pub(super) mod keepalive {
+             tcp_keepalive_probe,
+             ..
+         } = conn_opts;
+-        if *tcp_keepalive == 0 {
++        if *tcp_keepalive == 0.0 {
+             return None;
+         };
+-        let secs = Duration::from_secs(*tcp_keepalive as u64);
++        let secs = Duration::from_secs_f32(*tcp_keepalive);
+         let mut kpa = TcpKeepalive::new().with_time(secs);
+         #[cfg(not(target_os = "openbsd"))]
+         {
+diff --git a/realm_core/src/time.rs b/realm_core/src/time.rs
+index c24fb47..cbdda33 100644
+--- a/realm_core/src/time.rs
++++ b/realm_core/src/time.rs
+@@ -54,11 +54,11 @@ impl<T: Future> Future for Timeout<T> {
+ /// Wrap a future with timeout.
+ ///
+ /// Timeout = 0 means never timeout.
+-pub fn timeoutfut<F: Future>(future: F, timeout: usize) -> Timeout<F> {
++pub fn timeoutfut<F: Future>(future: F, timeout: f32) -> Timeout<F> {
+     use tokio::time::sleep;
+     let delay = match timeout {
+-        0 => Delay::None,
+-        x => Delay::Some(sleep(Duration::from_secs(x as u64))),
++        0.0 => Delay::None,
++        x => Delay::Some(sleep(Duration::from_secs_f32(x))),
+     };
+     Timeout { value: future, delay }
+ }
+diff --git a/realm_core/tests/proxy_v1.rs b/realm_core/tests/proxy_v1.rs
+index b1e0419..12eebf1 100644
+--- a/realm_core/tests/proxy_v1.rs
++++ b/realm_core/tests/proxy_v1.rs
+@@ -43,7 +43,7 @@ async fn proxy_v1() {
+         conn_opts: ConnectOpts {
+             proxy_opts: ProxyOpts {
+                 accept_proxy: true,
+-                accept_proxy_timeout: 5,
++                accept_proxy_timeout: 5.0,
+                 ..Default::default()
+             },
+             ..Default::default()
+diff --git a/realm_core/tests/proxy_v2.rs b/realm_core/tests/proxy_v2.rs
+index a785b57..c4e9d3c 100644
+--- a/realm_core/tests/proxy_v2.rs
++++ b/realm_core/tests/proxy_v2.rs
+@@ -43,7 +43,7 @@ async fn proxy_v2() {
+         conn_opts: ConnectOpts {
+             proxy_opts: ProxyOpts {
+                 accept_proxy: true,
+-                accept_proxy_timeout: 5,
++                accept_proxy_timeout: 5.0,
+                 ..Default::default()
+             },
+             ..Default::default()
+diff --git a/src/conf/net.rs b/src/conf/net.rs
+index 4f4e91a..d693bac 100644
+--- a/src/conf/net.rs
++++ b/src/conf/net.rs
+@@ -42,11 +42,11 @@ pub struct NetConf {
+     pub send_proxy_version: Option<usize>,
+ 
+     #[serde(default)]
+-    pub accept_proxy_timeout: Option<usize>,
++    pub accept_proxy_timeout: Option<f32>,
+ 
+     #[serde(default)]
+     #[serde(skip_serializing_if = "Option::is_none")]
+-    pub tcp_keepalive: Option<usize>,
++    pub tcp_keepalive: Option<f32>,
+ 
+     #[serde(default)]
+     #[serde(skip_serializing_if = "Option::is_none")]
+@@ -54,11 +54,11 @@ pub struct NetConf {
+ 
+     #[serde(default)]
+     #[serde(skip_serializing_if = "Option::is_none")]
+-    pub tcp_timeout: Option<usize>,
++    pub tcp_timeout: Option<f32>,
+ 
+     #[serde(default)]
+     #[serde(skip_serializing_if = "Option::is_none")]
+-    pub udp_timeout: Option<usize>,
++    pub udp_timeout: Option<f32>,
+ }
+ 
+ #[derive(Debug)]
+@@ -96,10 +96,13 @@ impl Config for NetConf {
+         let ipv6_only = unbox!(ipv6_only);
+         let listen_mptcp = unbox!(listen_mptcp);
+         let conn_mptcp = unbox!(conn_mptcp);
+-        let tcp_kpa = unbox!(tcp_keepalive, TCP_KEEPALIVE);
++        let tcp_kpa0 = unbox!(tcp_keepalive, TCP_KEEPALIVE);
++        let tcp_kpa = if tcp_kpa0 <= 0.0 { TCP_KEEPALIVE } else { tcp_kpa0 };
+         let tcp_kpa_probe = unbox!(tcp_keepalive_probe, TCP_KEEPALIVE_PROBE);
+-        let tcp_timeout = unbox!(tcp_timeout, TCP_TIMEOUT);
+-        let udp_timeout = unbox!(udp_timeout, UDP_TIMEOUT);
++        let tcp_timeout0 = unbox!(tcp_timeout, TCP_TIMEOUT);
++        let tcp_timeout = if tcp_timeout0 <= 0.0 { TCP_TIMEOUT } else { tcp_timeout0 };
++        let udp_timeout0 = unbox!(udp_timeout, UDP_TIMEOUT);
++        let udp_timeout = if udp_timeout0 <= 0.0 { UDP_TIMEOUT } else { udp_timeout0 };
+ 
+         let bind_opts = BindOpts { ipv6_only, listen_mptcp };
+         let conn_opts = ConnectOpts {
+@@ -203,16 +206,16 @@ impl Config for NetConf {
+         let listen_mptcp = unpack!("listen_mptcp");
+         let conn_mptcp = unpack!("conn_mptcp");
+ 
+-        let tcp_keepalive = unpack!("tcp_keepalive", usize);
++        let tcp_keepalive = unpack!("tcp_keepalive", f32);
+         let tcp_keepalive_probe = unpack!("tcp_keepalive", usize);
+-        let tcp_timeout = unpack!("tcp_timeout", usize);
+-        let udp_timeout = unpack!("udp_timeout", usize);
++        let tcp_timeout = unpack!("tcp_timeout", f32);
++        let udp_timeout = unpack!("udp_timeout", f32);
+ 
+         let send_proxy = unpack!("send_proxy", bool);
+         let send_proxy_version = unpack!("send_proxy_version", usize);
+ 
+         let accept_proxy = unpack!("accept_proxy", bool);
+-        let accept_proxy_timeout = unpack!("accept_proxy_timeout", usize);
++        let accept_proxy_timeout = unpack!("accept_proxy_timeout", f32);
+ 
+         Self {
+             no_tcp,
+diff --git a/src/consts.rs b/src/consts.rs
+index 539a850..5a8da0d 100644
+--- a/src/consts.rs
++++ b/src/consts.rs
+@@ -4,16 +4,16 @@ use std::fmt::{Display, Formatter};
+ pub const DEFAULT_LOG_FILE: &str = "stdout";
+ 
+ // default timeout
+-pub const TCP_TIMEOUT: usize = 5;
+-pub const TCP_KEEPALIVE: usize = 15;
++pub const TCP_TIMEOUT: f32 = 5.0;
++pub const TCP_KEEPALIVE: f32 = 15.0;
+ pub const TCP_KEEPALIVE_PROBE: usize = 3;
+-pub const UDP_TIMEOUT: usize = 30;
++pub const UDP_TIMEOUT: f32 = 30.0;
+ 
+ // default haproxy proxy-protocol version
+ pub const PROXY_PROTOCOL_VERSION: usize = 2;
+ 
+ // default haproxy proxy-protocol version
+-pub const PROXY_PROTOCOL_TIMEOUT: usize = 5;
++pub const PROXY_PROTOCOL_TIMEOUT: f32 = 5.0;
+ 
+ // features
+ macro_rules! def_feat {
