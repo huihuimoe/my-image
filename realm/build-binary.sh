@@ -24,12 +24,14 @@ if [[ -d realm-src ]]; then
   patch -p1 < ../01.dns-retry-once.patch
   patch -p1 < ../02.mptcp.patch
   patch -p1 < ../03.timeout_float.patch
+  patch -p1 < ../04.tcp_conn_retry.patch
 else
   git clone https://github.com/zhboner/realm -b v$VERSION --depth=1 realm-src
   cd realm-src
   patch -p1 < ../01.dns-retry-once.patch
   patch -p1 < ../02.mptcp.patch
   patch -p1 < ../03.timeout_float.patch
+  patch -p1 < ../04.tcp_conn_retry.patch
 fi
 
 cp ../Cross.toml Cross.toml
