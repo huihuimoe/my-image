@@ -30,7 +30,7 @@ index fc54394..3a5bcfa 100644
  
          #[cfg(feature = "transport")]
 diff --git a/realm_core/src/tcp/socket.rs b/realm_core/src/tcp/socket.rs
-index 994f2e9..ffae87c 100644
+index 994f2e9..ac4e643 100644
 --- a/realm_core/src/tcp/socket.rs
 +++ b/realm_core/src/tcp/socket.rs
 @@ -38,6 +38,7 @@ pub fn bind(laddr: &SocketAddr, bind_opts: BindOpts) -> Result<TcpListener> {
@@ -52,8 +52,21 @@ index 994f2e9..ffae87c 100644
          log::debug!("[tcp]{} resolved as {}", raddr, &addr);
  
          #[cfg(target_os = "linux")]
-@@ -93,6 +97,7 @@ pub async fn connect(raddr: &RemoteAddr, conn_opts: &ConnectOpts) -> Result<TcpS
-             Err(_) => log::warn!("[tcp]connect to {} as {} timeout, try next ip", raddr, &addr),
+@@ -83,16 +87,17 @@ pub async fn connect(raddr: &RemoteAddr, conn_opts: &ConnectOpts) -> Result<TcpS
+ 
+         match timeoutfut(socket.connect(addr), *connect_timeout).await {
+             Ok(Ok(stream)) => {
+-                log::debug!("[tcp]connect to {} as {}", raddr, &addr,);
++                log::debug!("[tcp]connect({}) to {} as {}", try_conn_cnt, raddr, &addr,);
+                 return Ok(stream);
+             }
+             Ok(Err(e)) => {
+-                log::warn!("[tcp]connect to {} as {}: {}, try next ip", raddr, &addr, &e);
++                log::warn!("[tcp]connect({}) to {} as {}: {}, try next ip", try_conn_cnt, raddr, &addr, &e);
+                 last_err = Some(e);
+             }
+-            Err(_) => log::warn!("[tcp]connect to {} as {} timeout, try next ip", raddr, &addr),
++            Err(_) => log::warn!("[tcp]connect({}) to {} as {} timeout, try next ip", try_conn_cnt, raddr, &addr),
          }
      }
 +    }
