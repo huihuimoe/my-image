@@ -1,0 +1,141 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index f36fde3..f039750 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -34,7 +34,7 @@ futures = "0.3"
+ walkdir = "2"
+ 
+ # runtime
+-tokio = { version = "1", features = ["rt"] }
++tokio = { version = "1", features = ["rt", "signal"] }
+ 
+ # logger
+ log = "0.4"
+diff --git a/src/bin.rs b/src/bin.rs
+index 147fdac..80f2584 100644
+--- a/src/bin.rs
++++ b/src/bin.rs
+@@ -21,7 +21,7 @@ cfg_if! {
+     }
+ }
+ 
+-fn main() {
++fn setup() -> Vec<EndpointInfo> {
+     let conf = 'blk: {
+         if let Ok(conf_str) = env::var(ENV_CONFIG) {
+             if let Ok(conf) = FullConf::from_conf_str(&conf_str) {
+@@ -45,10 +45,11 @@ fn main() {
+         }
+     };
+ 
+-    start_from_conf(conf);
++    setup_from_conf(conf)
+ }
+ 
+-fn start_from_conf(full: FullConf) {
++static mut SETUP_OK: bool = false;
++fn setup_from_conf(full: FullConf) -> Vec<EndpointInfo> {
+     let FullConf {
+         log: log_conf,
+         dns: dns_conf,
+@@ -58,6 +59,7 @@ fn start_from_conf(full: FullConf) {
+ 
+     setup_log(log_conf);
+     setup_dns(dns_conf);
++    unsafe { SETUP_OK = true };
+ 
+     let endpoints: Vec<EndpointInfo> = endpoints_conf
+         .into_iter()
+@@ -65,13 +67,14 @@ fn start_from_conf(full: FullConf) {
+         .inspect(|x| println!("inited: {}", x.endpoint))
+         .collect();
+ 
+-    execute(endpoints);
++    endpoints
+ }
+ 
+ fn setup_log(log: LogConf) {
+     println!("log: {}", &log);
+ 
+     let (level, output) = log.build();
++    if unsafe { SETUP_OK } { return log::set_max_level(level); }
+     fern::Dispatch::new()
+         .format(|out, message, record| {
+             out.finish(format_args!(
+@@ -85,24 +88,25 @@ fn setup_log(log: LogConf) {
+         .level(level)
+         .chain(output)
+         .apply()
+-        .unwrap_or_else(|e| panic!("failed to setup logger: {}", &e))
++        .unwrap_or_else(|e| panic!("failed to setup logger: {}", &e));
+ }
+ 
+ fn setup_dns(dns: DnsConf) {
++    if unsafe { SETUP_OK } { return println!("FIXME: can not now reload dns settings now"); }
+     println!("dns: {}", &dns);
+ 
+     let (conf, opts) = dns.build();
+     realm::core::dns::build_lazy(conf, opts);
+ }
+ 
+-fn execute(eps: Vec<EndpointInfo>) {
++fn main() {
+     #[cfg(feature = "multi-thread")]
+     {
+         tokio::runtime::Builder::new_multi_thread()
+             .enable_all()
+             .build()
+             .unwrap()
+-            .block_on(run(eps))
++            .block_on(warp_run())
+     }
+ 
+     #[cfg(not(feature = "multi-thread"))]
+@@ -111,14 +115,37 @@ fn execute(eps: Vec<EndpointInfo>) {
+             .enable_all()
+             .build()
+             .unwrap()
+-            .block_on(run(eps))
++            .block_on(warp_run())
+     }
+ }
+ 
+-async fn run(endpoints: Vec<EndpointInfo>) {
++async fn warp_run() {
++    use tokio::signal;
++    use tokio::signal::unix::SignalKind;
++    let mut workers = run(setup());
++
++    // wait SIGHUP for reload
++    #[cfg(unix)]
++    tokio::spawn(async move {
++        loop {
++            signal::unix::signal(SignalKind::hangup())
++                .unwrap()
++                .recv()
++                .await
++                .expect("failed to listen for event");
++            log::warn!("config reloading...");
++            let workers_new = run(setup());
++            workers.iter_mut().for_each(|w| w.abort());
++            workers = workers_new;
++        }
++    });
++
++    signal::ctrl_c().await.expect("failed to listen for event");
++}
++
++fn run(endpoints: Vec<EndpointInfo>) -> Vec<tokio::task::JoinHandle<Result<(), std::io::Error>>> {
+     use realm::core::tcp::run_tcp;
+     use realm::core::udp::run_udp;
+-    use futures::future::join_all;
+ 
+     let mut workers = Vec::with_capacity(2 * endpoints.len());
+ 
+@@ -139,5 +166,5 @@ async fn run(endpoints: Vec<EndpointInfo>) {
+ 
+     workers.shrink_to_fit();
+ 
+-    join_all(workers).await;
++    workers
+ }

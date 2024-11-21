@@ -1,4 +1,4 @@
-FROM cgr.dev/chainguard/cc-dynamic
+FROM cgr.dev/chainguard/glibc-dynamic
 ARG TARGETOS
 ARG TARGETARCH
 
