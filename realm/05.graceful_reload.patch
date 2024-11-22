@@ -11,8 +11,31 @@ index f36fde3..f039750 100644
  
  # logger
  log = "0.4"
+diff --git a/realm_core/src/dns/mod.rs b/realm_core/src/dns/mod.rs
+index 8b3d4b5..c7c0e3d 100644
+--- a/realm_core/src/dns/mod.rs
++++ b/realm_core/src/dns/mod.rs
+@@ -62,6 +62,18 @@ pub fn build(conf: Option<ResolverConfig>, opts: Option<ResolverOpts>) {
+     force_init();
+ }
+ 
++/// unsafe replace DNS with new resolver config
++pub fn reload(conf: Option<ResolverConfig>, opts: Option<ResolverOpts>) {
++    use std::ptr;
++    let dns_conf = DnsConf::default();
++    let conf = conf.unwrap_or_else(|| dns_conf.conf);
++    let opts = opts.unwrap_or_else(|| dns_conf.opts);
++    unsafe {
++        let dns = Lazy::force_mut(&mut *ptr::addr_of_mut!(DNS));
++        *dns = TokioAsyncResolver::tokio(conf, opts);
++    }
++}
++
+ /// Setup config of global dns resolver, without initialization.
+ /// This is not thread-safe!
+ pub fn build_lazy(conf: Option<ResolverConfig>, opts: Option<ResolverOpts>) {
 diff --git a/src/bin.rs b/src/bin.rs
-index 147fdac..80f2584 100644
+index 147fdac..c9e563b 100644
 --- a/src/bin.rs
 +++ b/src/bin.rs
 @@ -21,7 +21,7 @@ cfg_if! {
@@ -71,10 +94,10 @@ index 147fdac..80f2584 100644
  }
  
  fn setup_dns(dns: DnsConf) {
-+    if unsafe { SETUP_OK } { return println!("FIXME: can not now reload dns settings now"); }
      println!("dns: {}", &dns);
  
      let (conf, opts) = dns.build();
++    if unsafe { SETUP_OK } { return realm::core::dns::reload(conf, opts); }
      realm::core::dns::build_lazy(conf, opts);
  }
  
@@ -91,7 +114,7 @@ index 147fdac..80f2584 100644
      }
  
      #[cfg(not(feature = "multi-thread"))]
-@@ -111,14 +115,37 @@ fn execute(eps: Vec<EndpointInfo>) {
+@@ -111,14 +115,34 @@ fn execute(eps: Vec<EndpointInfo>) {
              .enable_all()
              .build()
              .unwrap()
@@ -109,12 +132,9 @@ index 147fdac..80f2584 100644
 +    // wait SIGHUP for reload
 +    #[cfg(unix)]
 +    tokio::spawn(async move {
++        let mut hup = signal::unix::signal(SignalKind::hangup()).unwrap();
 +        loop {
-+            signal::unix::signal(SignalKind::hangup())
-+                .unwrap()
-+                .recv()
-+                .await
-+                .expect("failed to listen for event");
++            hup.recv().await.expect("failed to listen for event");
 +            log::warn!("config reloading...");
 +            let workers_new = run(setup());
 +            workers.iter_mut().for_each(|w| w.abort());
@@ -132,7 +152,7 @@ index 147fdac..80f2584 100644
  
      let mut workers = Vec::with_capacity(2 * endpoints.len());
  
-@@ -139,5 +166,5 @@ async fn run(endpoints: Vec<EndpointInfo>) {
+@@ -139,5 +163,5 @@ async fn run(endpoints: Vec<EndpointInfo>) {
  
      workers.shrink_to_fit();
  
