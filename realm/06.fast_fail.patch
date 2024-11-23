@@ -1,0 +1,32 @@
+diff --git a/realm_core/src/tcp/mod.rs b/realm_core/src/tcp/mod.rs
+index 374ed1c..5b27a41 100644
+--- a/realm_core/src/tcp/mod.rs
++++ b/realm_core/src/tcp/mod.rs
+@@ -34,7 +34,10 @@ pub async fn run_tcp(endpoint: Endpoint) -> Result<()> {
+     let conn_opts = Ref::new(&conn_opts);
+     let extra_raddrs = Ref::new(&extra_raddrs);
+ 
+-    let lis = socket::bind(&laddr, bind_opts).unwrap_or_else(|e| panic!("[tcp]failed to bind {}: {}", &laddr, e));
++    let lis = socket::bind(&laddr, bind_opts).unwrap_or_else(|e| {
++        log::error!("[tcp]failed to bind {}: {}", &laddr, e);
++        std::process::exit(1);
++    });
+     let keepalive = socket::keepalive::build(&conn_opts);
+ 
+     loop {
+diff --git a/realm_core/src/udp/mod.rs b/realm_core/src/udp/mod.rs
+index 6f045dc..8844425 100644
+--- a/realm_core/src/udp/mod.rs
++++ b/realm_core/src/udp/mod.rs
+@@ -25,7 +25,10 @@ pub async fn run_udp(endpoint: Endpoint) -> Result<()> {
+ 
+     let sockmap = SockMap::new();
+ 
+-    let lis = socket::bind(&laddr, bind_opts).unwrap_or_else(|e| panic!("[udp]failed to bind {}: {}", laddr, e));
++    let lis = socket::bind(&laddr, bind_opts).unwrap_or_else(|e| {
++        log::error!("[udp]failed to bind {}: {}", laddr, e);
++        std::process::exit(1);
++    });
+ 
+     let lis = Ref::new(&lis);
+     let raddr = Ref::new(&raddr);

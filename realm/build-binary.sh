@@ -26,6 +26,7 @@ if [[ -d realm-src ]]; then
   patch -p1 < ../03.timeout_float.patch
   patch -p1 < ../04.tcp_conn_retry.patch
   patch -p1 < ../05.graceful_reload.patch
+  patch -p1 < ../06.fast_fail.patch
 else
   git clone https://github.com/zhboner/realm -b v$VERSION --depth=1 realm-src
   cd realm-src
@@ -34,6 +35,7 @@ else
   patch -p1 < ../03.timeout_float.patch
   patch -p1 < ../04.tcp_conn_retry.patch
   patch -p1 < ../05.graceful_reload.patch
+  patch -p1 < ../06.fast_fail.patch
 fi
 
 cp ../Cross.toml Cross.toml
