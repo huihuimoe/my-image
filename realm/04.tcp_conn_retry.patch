@@ -1,5 +1,5 @@
 diff --git a/realm_core/src/endpoint.rs b/realm_core/src/endpoint.rs
-index fc54394..3a5bcfa 100644
+index 5435e68..912057d 100644
 --- a/realm_core/src/endpoint.rs
 +++ b/realm_core/src/endpoint.rs
 @@ -41,6 +41,7 @@ pub struct ConnectOpts {
@@ -10,7 +10,7 @@ index fc54394..3a5bcfa 100644
      pub bind_address: Option<SocketAddr>,
      pub bind_interface: Option<String>,
      pub conn_mptcp: bool,
-@@ -107,6 +108,7 @@ impl Display for ConnectOpts {
+@@ -119,6 +120,7 @@ impl Display for ConnectOpts {
              associate_timeout,
              tcp_keepalive,
              tcp_keepalive_probe,
@@ -18,7 +18,7 @@ index fc54394..3a5bcfa 100644
              bind_address,
              bind_interface,
              conn_mptcp,
-@@ -146,8 +148,8 @@ impl Display for ConnectOpts {
+@@ -158,8 +160,8 @@ impl Display for ConnectOpts {
  
          write!(
              f,
@@ -30,10 +30,10 @@ index fc54394..3a5bcfa 100644
  
          #[cfg(feature = "transport")]
 diff --git a/realm_core/src/tcp/socket.rs b/realm_core/src/tcp/socket.rs
-index 994f2e9..ac4e643 100644
+index 2908eba..814c265 100644
 --- a/realm_core/src/tcp/socket.rs
 +++ b/realm_core/src/tcp/socket.rs
-@@ -38,6 +38,7 @@ pub fn bind(laddr: &SocketAddr, bind_opts: BindOpts) -> Result<TcpListener> {
+@@ -48,6 +48,7 @@ pub fn bind(laddr: &SocketAddr, bind_opts: BindOpts) -> Result<TcpListener> {
  pub async fn connect(raddr: &RemoteAddr, conn_opts: &ConnectOpts) -> Result<TcpStream> {
      let ConnectOpts {
          connect_timeout,
@@ -41,7 +41,7 @@ index 994f2e9..ac4e643 100644
          bind_address,
  
          #[cfg(target_os = "linux")]
-@@ -50,7 +51,10 @@ pub async fn connect(raddr: &RemoteAddr, conn_opts: &ConnectOpts) -> Result<TcpS
+@@ -60,7 +61,10 @@ pub async fn connect(raddr: &RemoteAddr, conn_opts: &ConnectOpts) -> Result<TcpS
      let mut last_err = None;
      let keepalive = keepalive::build(conn_opts);
  
@@ -52,7 +52,7 @@ index 994f2e9..ac4e643 100644
          log::debug!("[tcp]{} resolved as {}", raddr, &addr);
  
          #[cfg(target_os = "linux")]
-@@ -83,16 +87,17 @@ pub async fn connect(raddr: &RemoteAddr, conn_opts: &ConnectOpts) -> Result<TcpS
+@@ -93,16 +97,17 @@ pub async fn connect(raddr: &RemoteAddr, conn_opts: &ConnectOpts) -> Result<TcpS
  
          match timeoutfut(socket.connect(addr), *connect_timeout).await {
              Ok(Ok(stream)) => {
@@ -74,10 +74,10 @@ index 994f2e9..ac4e643 100644
      Err(last_err.unwrap_or_else(|| Error::new(ErrorKind::InvalidInput, "could not connect to any address")))
  }
 diff --git a/src/cmd/flag.rs b/src/cmd/flag.rs
-index ab28c4e..d9caf4a 100644
+index e785af8..5ea8084 100644
 --- a/src/cmd/flag.rs
 +++ b/src/cmd/flag.rs
-@@ -233,6 +233,11 @@ pub fn add_global_options(app: Command) -> Command {
+@@ -239,6 +239,11 @@ pub fn add_global_options(app: Command) -> Command {
              .help("override default tcp keepalive count(3)")
              .value_name("count")
              .display_order(3),
@@ -90,7 +90,7 @@ index ab28c4e..d9caf4a 100644
  
      app
 diff --git a/src/conf/net.rs b/src/conf/net.rs
-index 67f0733..05717f6 100644
+index 6dd8181..200e4f6 100644
 --- a/src/conf/net.rs
 +++ b/src/conf/net.rs
 @@ -52,6 +52,10 @@ pub struct NetConf {
@@ -121,7 +121,7 @@ index 67f0733..05717f6 100644
          let tcp_timeout0 = unbox!(tcp_timeout, TCP_TIMEOUT);
          let tcp_timeout = if tcp_timeout0 <= 0.0 { TCP_TIMEOUT } else { tcp_timeout0 };
          let udp_timeout0 = unbox!(udp_timeout, UDP_TIMEOUT);
-@@ -108,6 +113,7 @@ impl Config for NetConf {
+@@ -112,6 +117,7 @@ impl Config for NetConf {
          let conn_opts = ConnectOpts {
              tcp_keepalive: tcp_kpa,
              tcp_keepalive_probe: tcp_kpa_probe,
@@ -129,7 +129,7 @@ index 67f0733..05717f6 100644
              connect_timeout: tcp_timeout,
              associate_timeout: udp_timeout,
              conn_mptcp,
-@@ -157,6 +163,7 @@ impl Config for NetConf {
+@@ -161,6 +167,7 @@ impl Config for NetConf {
          rst!(self, conn_mptcp, other);
          rst!(self, tcp_keepalive, other);
          rst!(self, tcp_keepalive_probe, other);
@@ -137,7 +137,7 @@ index 67f0733..05717f6 100644
          rst!(self, tcp_timeout, other);
          rst!(self, udp_timeout, other);
          rst!(self, send_proxy, other);
-@@ -179,6 +186,7 @@ impl Config for NetConf {
+@@ -183,6 +190,7 @@ impl Config for NetConf {
          take!(self, conn_mptcp, other);
          take!(self, tcp_keepalive, other);
          take!(self, tcp_keepalive_probe, other);
@@ -145,7 +145,7 @@ index 67f0733..05717f6 100644
          take!(self, tcp_timeout, other);
          take!(self, udp_timeout, other);
          take!(self, send_proxy, other);
-@@ -212,6 +220,7 @@ impl Config for NetConf {
+@@ -216,6 +224,7 @@ impl Config for NetConf {
  
          let tcp_keepalive = unpack!("tcp_keepalive", f32);
          let tcp_keepalive_probe = unpack!("tcp_keepalive", usize);
@@ -153,7 +153,7 @@ index 67f0733..05717f6 100644
          let tcp_timeout = unpack!("tcp_timeout", f32);
          let udp_timeout = unpack!("udp_timeout", f32);
  
-@@ -229,6 +238,7 @@ impl Config for NetConf {
+@@ -233,6 +242,7 @@ impl Config for NetConf {
              conn_mptcp,
              tcp_keepalive,
              tcp_keepalive_probe,

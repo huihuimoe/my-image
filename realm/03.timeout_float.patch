@@ -1,5 +1,5 @@
 diff --git a/realm_core/src/endpoint.rs b/realm_core/src/endpoint.rs
-index d98ef5e..fc54394 100644
+index b39cb07..5435e68 100644
 --- a/realm_core/src/endpoint.rs
 +++ b/realm_core/src/endpoint.rs
 @@ -23,7 +23,7 @@ pub struct ProxyOpts {
@@ -25,10 +25,10 @@ index d98ef5e..fc54394 100644
      pub bind_address: Option<SocketAddr>,
      pub bind_interface: Option<String>,
 diff --git a/realm_core/src/tcp/socket.rs b/realm_core/src/tcp/socket.rs
-index 6e6e459..994f2e9 100644
+index f5211fe..2908eba 100644
 --- a/realm_core/src/tcp/socket.rs
 +++ b/realm_core/src/tcp/socket.rs
-@@ -106,10 +106,10 @@ pub(super) mod keepalive {
+@@ -116,10 +116,10 @@ pub(super) mod keepalive {
              tcp_keepalive_probe,
              ..
          } = conn_opts;
@@ -87,7 +87,7 @@ index a785b57..c4e9d3c 100644
              },
              ..Default::default()
 diff --git a/src/conf/net.rs b/src/conf/net.rs
-index 44c68cf..67f0733 100644
+index 25bce90..6dd8181 100644
 --- a/src/conf/net.rs
 +++ b/src/conf/net.rs
 @@ -42,11 +42,11 @@ pub struct NetConf {
@@ -133,9 +133,9 @@ index 44c68cf..67f0733 100644
 +        let udp_timeout0 = unbox!(udp_timeout, UDP_TIMEOUT);
 +        let udp_timeout = if udp_timeout0 <= 0.0 { UDP_TIMEOUT } else { udp_timeout0 };
  
-         let bind_opts = BindOpts { ipv6_only, listen_mptcp };
-         let conn_opts = ConnectOpts {
-@@ -207,16 +210,16 @@ impl Config for NetConf {
+         let bind_opts = BindOpts {
+             ipv6_only,
+@@ -211,16 +214,16 @@ impl Config for NetConf {
          let listen_mptcp = unpack!("listen_mptcp");
          let conn_mptcp = unpack!("conn_mptcp");
  
