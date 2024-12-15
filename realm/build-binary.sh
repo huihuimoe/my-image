@@ -24,7 +24,7 @@ if [[ -d realm-src ]]; then
   patch -p1 < ../01.dns-retry-once.patch
   patch -p1 < ../02.mptcp.patch
   patch -p1 < ../03.timeout_float.patch
-  patch -p1 < ../04.tcp_conn_retry.patch
+  patch -p1 < ../04.tcp_conn_try.patch
   patch -p1 < ../05.graceful_reload.patch
   patch -p1 < ../06.fast_fail.patch
 else
@@ -33,7 +33,7 @@ else
   patch -p1 < ../01.dns-retry-once.patch
   patch -p1 < ../02.mptcp.patch
   patch -p1 < ../03.timeout_float.patch
-  patch -p1 < ../04.tcp_conn_retry.patch
+  patch -p1 < ../04.tcp_conn_try.patch
   patch -p1 < ../05.graceful_reload.patch
   patch -p1 < ../06.fast_fail.patch
 fi

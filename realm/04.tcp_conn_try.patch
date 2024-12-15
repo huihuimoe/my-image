@@ -1,12 +1,12 @@
 diff --git a/realm_core/src/endpoint.rs b/realm_core/src/endpoint.rs
-index 5435e68..912057d 100644
+index 5435e68..f4210e3 100644
 --- a/realm_core/src/endpoint.rs
 +++ b/realm_core/src/endpoint.rs
 @@ -41,6 +41,7 @@ pub struct ConnectOpts {
      pub associate_timeout: f32,
      pub tcp_keepalive: f32,
      pub tcp_keepalive_probe: usize,
-+    pub tcp_conn_retry: usize,
++    pub tcp_conn_try: usize,
      pub bind_address: Option<SocketAddr>,
      pub bind_interface: Option<String>,
      pub conn_mptcp: bool,
@@ -14,7 +14,7 @@ index 5435e68..912057d 100644
              associate_timeout,
              tcp_keepalive,
              tcp_keepalive_probe,
-+            tcp_conn_retry,
++            tcp_conn_try,
              bind_address,
              bind_interface,
              conn_mptcp,
@@ -24,20 +24,20 @@ index 5435e68..912057d 100644
              f,
 -            "tcp-keepalive={}s[{}] connect-timeout={}s, associate-timeout={}s, conn-mptcp={}; ",
 -            tcp_keepalive, tcp_keepalive_probe, connect_timeout, associate_timeout, conn_mptcp
-+            "tcp-keepalive={}s[{}] connect-timeout={}s, tcp_conn_retry={}, associate-timeout={}s, conn-mptcp={}; ",
-+            tcp_keepalive, tcp_keepalive_probe, connect_timeout, tcp_conn_retry, associate_timeout, conn_mptcp
++            "tcp-keepalive={}s[{}] connect-timeout={}s, tcp_conn_try={}, associate-timeout={}s, conn-mptcp={}; ",
++            tcp_keepalive, tcp_keepalive_probe, connect_timeout, tcp_conn_try, associate_timeout, conn_mptcp
          )?;
  
          #[cfg(feature = "transport")]
 diff --git a/realm_core/src/tcp/socket.rs b/realm_core/src/tcp/socket.rs
-index 2908eba..814c265 100644
+index 2908eba..c543363 100644
 --- a/realm_core/src/tcp/socket.rs
 +++ b/realm_core/src/tcp/socket.rs
 @@ -48,6 +48,7 @@ pub fn bind(laddr: &SocketAddr, bind_opts: BindOpts) -> Result<TcpListener> {
  pub async fn connect(raddr: &RemoteAddr, conn_opts: &ConnectOpts) -> Result<TcpStream> {
      let ConnectOpts {
          connect_timeout,
-+        tcp_conn_retry,
++        tcp_conn_try,
          bind_address,
  
          #[cfg(target_os = "linux")]
@@ -46,7 +46,7 @@ index 2908eba..814c265 100644
      let keepalive = keepalive::build(conn_opts);
  
 +    let mut try_conn_cnt = 0;
-+    while try_conn_cnt < *tcp_conn_retry {
++    while try_conn_cnt < *tcp_conn_try {
      for addr in resolve_addr(raddr).await?.iter() {
 +        try_conn_cnt += 1;
          log::debug!("[tcp]{} resolved as {}", raddr, &addr);
@@ -74,23 +74,23 @@ index 2908eba..814c265 100644
      Err(last_err.unwrap_or_else(|| Error::new(ErrorKind::InvalidInput, "could not connect to any address")))
  }
 diff --git a/src/cmd/flag.rs b/src/cmd/flag.rs
-index e785af8..5ea8084 100644
+index e785af8..59ef59a 100644
 --- a/src/cmd/flag.rs
 +++ b/src/cmd/flag.rs
 @@ -239,6 +239,11 @@ pub fn add_global_options(app: Command) -> Command {
              .help("override default tcp keepalive count(3)")
              .value_name("count")
              .display_order(3),
-+        Arg::new("tcp_conn_retry")
-+            .long("tcp-conn-retry")
-+            .help("override default tcp retry count(1)")
++        Arg::new("tcp_conn_try")
++            .long("tcp-conn-try")
++            .help("override default tcp try count(1)")
 +            .value_name("count")
 +            .display_order(4),
      ]);
  
      app
 diff --git a/src/conf/net.rs b/src/conf/net.rs
-index 6dd8181..200e4f6 100644
+index 6dd8181..82fe16a 100644
 --- a/src/conf/net.rs
 +++ b/src/conf/net.rs
 @@ -52,6 +52,10 @@ pub struct NetConf {
@@ -99,7 +99,7 @@ index 6dd8181..200e4f6 100644
  
 +    #[serde(default)]
 +    #[serde(skip_serializing_if = "Option::is_none")]
-+    pub tcp_conn_retry: Option<usize>,
++    pub tcp_conn_try: Option<usize>,
 +
      #[serde(default)]
      #[serde(skip_serializing_if = "Option::is_none")]
@@ -109,7 +109,7 @@ index 6dd8181..200e4f6 100644
              no_tcp, use_udp, ipv6_only,
              send_proxy, accept_proxy, send_proxy_version, accept_proxy_timeout,
 -            tcp_keepalive, tcp_keepalive_probe, tcp_timeout, udp_timeout,
-+            tcp_keepalive, tcp_keepalive_probe, tcp_conn_retry, tcp_timeout, udp_timeout,
++            tcp_keepalive, tcp_keepalive_probe, tcp_conn_try, tcp_timeout, udp_timeout,
              conn_mptcp, listen_mptcp
          ]
      }
@@ -117,7 +117,7 @@ index 6dd8181..200e4f6 100644
          let tcp_kpa0 = unbox!(tcp_keepalive, TCP_KEEPALIVE);
          let tcp_kpa = if tcp_kpa0 <= 0.0 { TCP_KEEPALIVE } else { tcp_kpa0 };
          let tcp_kpa_probe = unbox!(tcp_keepalive_probe, TCP_KEEPALIVE_PROBE);
-+        let tcp_conn_retry = unbox!(tcp_conn_retry, 1);
++        let tcp_conn_try = unbox!(tcp_conn_try, 1);
          let tcp_timeout0 = unbox!(tcp_timeout, TCP_TIMEOUT);
          let tcp_timeout = if tcp_timeout0 <= 0.0 { TCP_TIMEOUT } else { tcp_timeout0 };
          let udp_timeout0 = unbox!(udp_timeout, UDP_TIMEOUT);
@@ -125,7 +125,7 @@ index 6dd8181..200e4f6 100644
          let conn_opts = ConnectOpts {
              tcp_keepalive: tcp_kpa,
              tcp_keepalive_probe: tcp_kpa_probe,
-+            tcp_conn_retry,
++            tcp_conn_try,
              connect_timeout: tcp_timeout,
              associate_timeout: udp_timeout,
              conn_mptcp,
@@ -133,7 +133,7 @@ index 6dd8181..200e4f6 100644
          rst!(self, conn_mptcp, other);
          rst!(self, tcp_keepalive, other);
          rst!(self, tcp_keepalive_probe, other);
-+        rst!(self, tcp_conn_retry, other);
++        rst!(self, tcp_conn_try, other);
          rst!(self, tcp_timeout, other);
          rst!(self, udp_timeout, other);
          rst!(self, send_proxy, other);
@@ -141,7 +141,7 @@ index 6dd8181..200e4f6 100644
          take!(self, conn_mptcp, other);
          take!(self, tcp_keepalive, other);
          take!(self, tcp_keepalive_probe, other);
-+        take!(self, tcp_conn_retry, other);
++        take!(self, tcp_conn_try, other);
          take!(self, tcp_timeout, other);
          take!(self, udp_timeout, other);
          take!(self, send_proxy, other);
@@ -149,7 +149,7 @@ index 6dd8181..200e4f6 100644
  
          let tcp_keepalive = unpack!("tcp_keepalive", f32);
          let tcp_keepalive_probe = unpack!("tcp_keepalive", usize);
-+        let tcp_conn_retry = unpack!("tcp_conn_retry", usize);
++        let tcp_conn_try = unpack!("tcp_conn_try", usize);
          let tcp_timeout = unpack!("tcp_timeout", f32);
          let udp_timeout = unpack!("udp_timeout", f32);
  
@@ -157,7 +157,7 @@ index 6dd8181..200e4f6 100644
              conn_mptcp,
              tcp_keepalive,
              tcp_keepalive_probe,
-+            tcp_conn_retry,
++            tcp_conn_try,
              tcp_timeout,
              udp_timeout,
              send_proxy,
