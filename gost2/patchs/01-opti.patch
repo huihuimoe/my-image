@@ -1,0 +1,197 @@
+diff --git a/Makefile b/Makefile
+index 712e9ff..a351457 100644
+--- a/Makefile
++++ b/Makefile
+@@ -9,6 +9,7 @@ PLATFORM_LIST = \
+ 	darwin-arm64 \
+ 	linux-386 \
+ 	linux-amd64 \
++	linux-amd64v3 \
+ 	linux-armv5 \
+ 	linux-armv6 \
+ 	linux-armv7 \
+@@ -43,6 +44,9 @@ linux-386:
+ linux-amd64:
+ 	GOARCH=amd64 GOOS=linux $(GOBUILD) -o $(BINDIR)/$(NAME)-$@ $(GOFILES)
+ 
++linux-amd64v3:
++	GOARCH=amd64 GOOS=linux GOAMD64=v3 $(GOBUILD) -o $(BINDIR)/$(NAME)-$@ $(GOFILES)
++
+ linux-armv5:
+ 	GOARCH=arm GOOS=linux GOARM=5 $(GOBUILD) -o $(BINDIR)/$(NAME)-$@ $(GOFILES)
+ 
+diff --git a/chain.go b/chain.go
+index 8d3bc6f..c45ce37 100644
+--- a/chain.go
++++ b/chain.go
+@@ -5,6 +5,7 @@ import (
+ 	"errors"
+ 	"fmt"
+ 	"net"
++	"os"
+ 	"syscall"
+ 	"time"
+ 
+@@ -203,6 +204,9 @@ func (c *Chain) dialWithOptions(ctx context.Context, network, address string, op
+ 			Control: controlFunction,
+ 			// LocalAddr: laddr, // TODO: optional local address
+ 		}
++		if mptcp := os.Getenv("MptcpDial") ; mptcp != "" {
++			d.SetMultipathTCP(true)
++		}
+ 		return d.DialContext(ctx, network, ipAddr)
+ 	}
+ 
+diff --git a/cmd/gost/route.go b/cmd/gost/route.go
+index 360bc2d..3efb535 100644
+--- a/cmd/gost/route.go
++++ b/cmd/gost/route.go
+@@ -135,6 +135,9 @@ func parseChainNode(ns string) (nodes []gost.Node, err error) {
+ 		InsecureSkipVerify: !node.GetBool("secure"),
+ 		RootCAs:            rootCAs,
+ 	}
++	if sni := node.Get("sni"); sni != "" {
++		tlsCfg.ServerName = sni
++	}
+ 
+ 	// If the argument `ca` is given, but not open `secure`, we verify the
+ 	// certificate manually.
+diff --git a/tcp.go b/tcp.go
+index a255011..6ebb29a 100644
+--- a/tcp.go
++++ b/tcp.go
+@@ -1,6 +1,9 @@
+ package gost
+ 
+-import "net"
++import (
++	"net"
++	"os"
++)
+ 
+ // tcpTransporter is a raw TCP transporter.
+ type tcpTransporter struct{}
+@@ -21,7 +24,11 @@ func (tr *tcpTransporter) Dial(addr string, options ...DialOption) (net.Conn, er
+ 		timeout = DialTimeout
+ 	}
+ 	if opts.Chain == nil {
+-		return net.DialTimeout("tcp", addr, timeout)
++		d := net.Dialer{Timeout: timeout}
++		if mptcp := os.Getenv("MptcpDial") ; mptcp != "" {
++			d.SetMultipathTCP(true)
++		}
++		return d.Dial("tcp", addr)
+ 	}
+ 	return opts.Chain.Dial(addr)
+ }
+diff --git a/tls.go b/tls.go
+index 8526c6f..d4778aa 100644
+--- a/tls.go
++++ b/tls.go
+@@ -1,9 +1,12 @@
+ package gost
+ 
+ import (
++	"context"
+ 	"crypto/tls"
+ 	"errors"
+ 	"net"
++	"os"
++	"strconv"
+ 	"sync"
+ 	"time"
+ 
+@@ -72,7 +75,11 @@ func (tr *mtlsTransporter) Dial(addr string, options ...DialOption) (conn net.Co
+ 		}
+ 
+ 		if opts.Chain == nil {
+-			conn, err = net.DialTimeout("tcp", addr, timeout)
++			d := net.Dialer{Timeout: timeout}
++			if mptcp := os.Getenv("MptcpDial") ; mptcp != "" {
++				d.SetMultipathTCP(true)
++			}
++			conn, err = d.Dial("tcp", addr)
+ 		} else {
+ 			conn, err = opts.Chain.Dial(addr)
+ 		}
+@@ -137,6 +144,26 @@ func (tr *mtlsTransporter) initSession(addr string, conn net.Conn, opts *Handsha
+ 
+ 	// stream multiplex
+ 	smuxConfig := smux.DefaultConfig()
++	if smuxVersion := os.Getenv("SmuxVersion") ; smuxVersion != "" {
++		if smuxVersion, err := strconv.ParseUint(smuxVersion, 10, 0); err == nil {
++			smuxConfig.Version = int(smuxVersion)
++		}
++	}
++	if maxFrameSize := os.Getenv("SmuxMaxFrameSize") ; maxFrameSize != "" {
++		if maxFrameSize, err := strconv.ParseUint(maxFrameSize, 10, 0); err == nil {
++			smuxConfig.MaxFrameSize = int(maxFrameSize)
++		}
++	}
++	if maxReceiveBuffer := os.Getenv("SmuxMaxReceiveBuffer") ; maxReceiveBuffer != "" {
++		if maxReceiveBuffer, err := strconv.ParseUint(maxReceiveBuffer, 10, 0); err == nil {
++			smuxConfig.MaxReceiveBuffer = int(maxReceiveBuffer)
++		}
++	}
++	if maxStreamBuffer := os.Getenv("SmuxMaxStreamBuffer") ; maxStreamBuffer != "" {
++		if maxStreamBuffer, err := strconv.ParseUint(maxStreamBuffer, 10, 0); err == nil {
++			smuxConfig.MaxStreamBuffer = int(maxStreamBuffer)
++		}
++	}
+ 	session, err := smux.Client(conn, smuxConfig)
+ 	if err != nil {
+ 		return nil, err
+@@ -157,7 +184,11 @@ func TLSListener(addr string, config *tls.Config) (Listener, error) {
+ 	if config == nil {
+ 		config = DefaultTLSConfig
+ 	}
+-	ln, err := net.Listen("tcp", addr)
++	var lc net.ListenConfig
++	if mptcp := os.Getenv("MptcpListen") ; mptcp != "" {
++		lc.SetMultipathTCP(true)
++	}
++	ln, err := lc.Listen(context.Background(), "tcp", addr)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+@@ -177,7 +208,12 @@ func MTLSListener(addr string, config *tls.Config) (Listener, error) {
+ 	if config == nil {
+ 		config = DefaultTLSConfig
+ 	}
+-	ln, err := net.Listen("tcp", addr)
++
++	var lc net.ListenConfig
++	if mptcp := os.Getenv("MptcpListen") ; mptcp != "" {
++		lc.SetMultipathTCP(true)
++	}
++	ln, err := lc.Listen(context.Background(), "tcp", addr)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+@@ -208,6 +244,26 @@ func (l *mtlsListener) listenLoop() {
+ func (l *mtlsListener) mux(conn net.Conn) {
+ 	log.Logf("[mtls] %s - %s", conn.RemoteAddr(), l.Addr())
+ 	smuxConfig := smux.DefaultConfig()
++	if smuxVersion := os.Getenv("SmuxVersion") ; smuxVersion != "" {
++		if smuxVersion, err := strconv.ParseUint(smuxVersion, 10, 0); err == nil {
++			smuxConfig.Version = int(smuxVersion)
++		}
++	}
++	if maxFrameSize := os.Getenv("SmuxMaxFrameSize") ; maxFrameSize != "" {
++		if maxFrameSize, err := strconv.ParseUint(maxFrameSize, 10, 0); err == nil {
++			smuxConfig.MaxFrameSize = int(maxFrameSize)
++		}
++	}
++	if maxReceiveBuffer := os.Getenv("SmuxMaxReceiveBuffer") ; maxReceiveBuffer != "" {
++		if maxReceiveBuffer, err := strconv.ParseUint(maxReceiveBuffer, 10, 0); err == nil {
++			smuxConfig.MaxReceiveBuffer = int(maxReceiveBuffer)
++		}
++	}
++	if maxStreamBuffer := os.Getenv("SmuxMaxStreamBuffer") ; maxStreamBuffer != "" {
++		if maxStreamBuffer, err := strconv.ParseUint(maxStreamBuffer, 10, 0); err == nil {
++			smuxConfig.MaxStreamBuffer = int(maxStreamBuffer)
++		}
++	}
+ 	mux, err := smux.Server(conn, smuxConfig)
+ 	if err != nil {
+ 		log.Logf("[mtls] %s - %s : %s", conn.RemoteAddr(), l.Addr(), err)

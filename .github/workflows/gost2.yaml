@@ -1,0 +1,24 @@
+name: Build gost2
+
+on:
+  workflow_dispatch:
+    inputs:
+      gost2-version:
+        description: 'gost2 version to use'
+        required: true
+        type: string
+        default: '2.12.0'
+
+jobs:
+  build:
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/template.yaml
+    with:
+      context: gost2
+      tags: ${{ inputs.gost2-version }}
+      build-args: "VERSION=${{ inputs.gost2-version }}"
+      platforms: linux/amd64,linux/arm64
