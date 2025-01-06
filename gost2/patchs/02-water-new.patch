@@ -1,0 +1,143 @@
+diff --git a/go.mod b/go.mod
+index d633666..51f859a 100644
+--- a/go.mod
++++ b/go.mod
+@@ -16,13 +16,13 @@ require (
+ 	github.com/gobwas/glob v0.2.3
+ 	github.com/gorilla/websocket v1.5.1
+ 	github.com/klauspost/compress v1.17.6
++	github.com/labulakalia/water v0.0.4
+ 	github.com/mdlayher/vsock v1.2.1
+ 	github.com/miekg/dns v1.1.58
+ 	github.com/quic-go/quic-go v0.45.0
+ 	github.com/ryanuber/go-glob v1.0.0
+ 	github.com/shadowsocks/go-shadowsocks2 v0.1.5
+ 	github.com/shadowsocks/shadowsocks-go v0.0.0-20200409064450-3e585ff90601
+-	github.com/songgao/water v0.0.0-20200317203138-2b4b6d7c09d8
+ 	github.com/xtaci/kcp-go/v5 v5.6.7
+ 	github.com/xtaci/smux v1.5.24
+ 	github.com/xtaci/tcpraw v1.2.25
+@@ -57,4 +57,5 @@ require (
+ 	golang.org/x/sys v0.21.0 // indirect
+ 	golang.org/x/text v0.16.0 // indirect
+ 	golang.org/x/tools v0.22.0 // indirect
++	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
+ )
+diff --git a/go.sum b/go.sum
+index 1b988e4..1226e5c 100644
+--- a/go.sum
++++ b/go.sum
+@@ -69,6 +69,8 @@ github.com/klauspost/cpuid/v2 v2.2.6 h1:ndNyv040zDGIDh8thGkXYjnFtiN02M1PVVF+JE/4
+ github.com/klauspost/cpuid/v2 v2.2.6/go.mod h1:Lcz8mBdAVJIBVzewtcLocK12l3Y+JytZYpaMropDUws=
+ github.com/klauspost/reedsolomon v1.12.0 h1:I5FEp3xSwVCcEh3F5A7dofEfhXdF/bWhQWPH+XwBFno=
+ github.com/klauspost/reedsolomon v1.12.0/go.mod h1:EPLZJeh4l27pUGC3aXOjheaoh1I9yut7xTURiW3LQ9Y=
++github.com/labulakalia/water v0.0.4 h1:igw8mqpbdNKrVKLYA+BYoJvqiOjO4aAaCBcEp0jSXio=
++github.com/labulakalia/water v0.0.4/go.mod h1:Rt5j0n1K2IHqMBgW/tsXLp1wt98kLSCD6krteM6s9Pc=
+ github.com/mdlayher/socket v0.4.1 h1:eM9y2/jlbs1M615oshPQOHZzj6R6wMT7bX5NPiQvn2U=
+ github.com/mdlayher/socket v0.4.1/go.mod h1:cAqeGjoufqdxWkD7DkpyS+wcefOtmu5OQ8KuoJGIReA=
+ github.com/mdlayher/vsock v1.2.1 h1:pC1mTJTvjo1r9n9fbm7S1j04rCgCzhCOS5DY0zqHlnQ=
+@@ -94,8 +96,6 @@ github.com/shadowsocks/go-shadowsocks2 v0.1.5 h1:PDSQv9y2S85Fl7VBeOMF9StzeXZyK1H
+ github.com/shadowsocks/go-shadowsocks2 v0.1.5/go.mod h1:AGGpIoek4HRno4xzyFiAtLHkOpcoznZEkAccaI/rplM=
+ github.com/shadowsocks/shadowsocks-go v0.0.0-20200409064450-3e585ff90601 h1:XU9hik0exChEmY92ALW4l9WnDodxLVS9yOSNh2SizaQ=
+ github.com/shadowsocks/shadowsocks-go v0.0.0-20200409064450-3e585ff90601/go.mod h1:mttDPaeLm87u74HMrP+n2tugXvIKWcwff/cqSX0lehY=
+-github.com/songgao/water v0.0.0-20200317203138-2b4b6d7c09d8 h1:TG/diQgUe0pntT/2D9tmUCz4VNwm9MfrtPr0SU2qSX8=
+-github.com/songgao/water v0.0.0-20200317203138-2b4b6d7c09d8/go.mod h1:P5HUIBuIWKbyjl083/loAegFkfbFNx5i2qEP4CNbm7E=
+ github.com/stretchr/testify v1.8.4 h1:CcVxjf3Q8PM0mHUKJCdn+eZZtm5yQwehR5yeSVQQcUk=
+ github.com/stretchr/testify v1.8.4/go.mod h1:sz/lmYIOXD/1dqDmKjjqLyZ2RngseejIcXlSw2iwfAo=
+ github.com/templexxx/cpu v0.1.0 h1:wVM+WIJP2nYaxVxqgHPD4wGA2aJ9rvrQRV8CvFzNb40=
+@@ -182,6 +182,8 @@ golang.org/x/tools v0.22.0 h1:gqSGLZqv+AI9lIQzniJ0nZDRG5GBPsSi+DRNHWNz6yA=
+ golang.org/x/tools v0.22.0/go.mod h1:aCwcsjqvq7Yqt6TNyX7QMU2enbQ/Gt0bo6krSeEri+c=
+ golang.org/x/xerrors v0.0.0-20191011141410-1b5146add898/go.mod h1:I/5z698sn9Ka8TeJc9MKroUUfqBBauWjQqLJ2OPfmY0=
+ golang.org/x/xerrors v0.0.0-20191204190536-9bdfabe68543/go.mod h1:I/5z698sn9Ka8TeJc9MKroUUfqBBauWjQqLJ2OPfmY0=
++golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 h1:B82qJJgjvYKsXS9jeunTOisW56dUokqW/FOteYJJ/yg=
++golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2/go.mod h1:deeaetjYA+DHMHg+sMSMI58GrEteJUUzzw7en6TJQcI=
+ google.golang.org/appengine v1.1.0/go.mod h1:EbEs0AVv82hx2wNQdGPgUI5lhzA/G0D9YwlJXL52JkM=
+ google.golang.org/appengine v1.4.0/go.mod h1:xpcJRLb0r/rnEns0DIKYYv+WjYCduHsrkT7/EB5XEv4=
+ google.golang.org/genproto v0.0.0-20180817151627-c66870c02cf8/go.mod h1:JiN7NxoALGmiZfu7CAH4rXhgtRTLTxftemlI0sWmxmc=
+diff --git a/tuntap.go b/tuntap.go
+index e38ab63..c1027ac 100644
+--- a/tuntap.go
++++ b/tuntap.go
+@@ -11,10 +11,10 @@ import (
+ 	"time"
+ 
+ 	"github.com/go-log/log"
++	"github.com/labulakalia/water"
++	"github.com/labulakalia/water/waterutil"
+ 	"github.com/shadowsocks/go-shadowsocks2/core"
+ 	"github.com/shadowsocks/go-shadowsocks2/shadowaead"
+-	"github.com/songgao/water"
+-	"github.com/songgao/water/waterutil"
+ 	"github.com/xtaci/tcpraw"
+ 	"golang.org/x/net/ipv4"
+ 	"golang.org/x/net/ipv6"
+diff --git a/tuntap_darwin.go b/tuntap_darwin.go
+index ffe2ac7..6db38a1 100644
+--- a/tuntap_darwin.go
++++ b/tuntap_darwin.go
+@@ -8,7 +8,7 @@ import (
+ 	"strings"
+ 
+ 	"github.com/go-log/log"
+-	"github.com/songgao/water"
++	"github.com/labulakalia/water"
+ )
+ 
+ func createTun(cfg TunConfig) (conn net.Conn, itf *net.Interface, err error) {
+diff --git a/tuntap_linux.go b/tuntap_linux.go
+index c63ffaa..7304c18 100644
+--- a/tuntap_linux.go
++++ b/tuntap_linux.go
+@@ -7,7 +7,7 @@ import (
+ 	"strings"
+ 
+ 	"github.com/go-log/log"
+-	"github.com/songgao/water"
++	"github.com/labulakalia/water"
+ )
+ 
+ func createTun(cfg TunConfig) (conn net.Conn, itf *net.Interface, err error) {
+diff --git a/tuntap_unix.go b/tuntap_unix.go
+index 04d6db0..11f0af9 100644
+--- a/tuntap_unix.go
++++ b/tuntap_unix.go
+@@ -10,7 +10,7 @@ import (
+ 	"strings"
+ 
+ 	"github.com/go-log/log"
+-	"github.com/songgao/water"
++	"github.com/labulakalia/water"
+ )
+ 
+ func createTun(cfg TunConfig) (conn net.Conn, itf *net.Interface, err error) {
+diff --git a/tuntap_windows.go b/tuntap_windows.go
+index dd467aa..ee908e9 100644
+--- a/tuntap_windows.go
++++ b/tuntap_windows.go
+@@ -7,7 +7,7 @@ import (
+ 	"strings"
+ 
+ 	"github.com/go-log/log"
+-	"github.com/songgao/water"
++	"github.com/labulakalia/water"
+ )
+ 
+ func createTun(cfg TunConfig) (conn net.Conn, itf *net.Interface, err error) {
+@@ -20,7 +20,7 @@ func createTun(cfg TunConfig) (conn net.Conn, itf *net.Interface, err error) {
+ 		DeviceType: water.TUN,
+ 		PlatformSpecificParams: water.PlatformSpecificParams{
+ 			ComponentID:   "tap0901",
+-			InterfaceName: cfg.Name,
++			Name: cfg.Name,
+ 			Network:       cfg.Addr,
+ 		},
+ 	})
+@@ -61,7 +61,7 @@ func createTap(cfg TapConfig) (conn net.Conn, itf *net.Interface, err error) {
+ 		DeviceType: water.TAP,
+ 		PlatformSpecificParams: water.PlatformSpecificParams{
+ 			ComponentID:   "tap0901",
+-			InterfaceName: cfg.Name,
++			Name: cfg.Name,
+ 			Network:       cfg.Addr,
+ 		},
+ 	})
