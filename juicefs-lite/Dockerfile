@@ -8,11 +8,13 @@ RUN set -ex && \
     cd /go && \
     git clone --depth=1 https://github.com/juicedata/juicefs -b v${VERSION} && \
     cd juicefs && \
-    # enable badger
-    sed -i 's/,nobadger//' Makefile && \
-    # fixing build error on old github.com/grafana/pyroscope-go
-    # go get -v github.com/grafana/pyroscope-go && \
-    go mod tidy
+    # enable badger, sqlite, nfs, dragonfly, sftp
+    sed -i 's/nobadger,//' Makefile && \
+    sed -i 's/nosqlite,//' Makefile && \
+    sed -i 's/nonfs,//' Makefile && \
+    sed -i 's/nodragonfly,//' Makefile && \
+    sed -i 's/nosftp,//' Makefile && \
+    true
 
 FROM --platform=$BUILDPLATFORM base AS builder-amd64
 ARG TARGETOS
