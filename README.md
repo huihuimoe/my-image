@@ -45,6 +45,8 @@ podman run \
 ## nginx
 
 experimental image of [different ssl library support on nginx](https://github.com/huihuimoe/my-scripts).
+
+- Size: ~30MB(Base on GoogleContainerTools/distroless/debian12)
 - Package:
   - awslc: `ghcr.io/huihuimoe/my-image/nginx:1.27.4-awslc`
   - boringssl: `ghcr.io/huihuimoe/my-image/nginx:1.27.4-boringssl`
