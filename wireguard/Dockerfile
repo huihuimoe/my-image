@@ -45,4 +45,7 @@ RUN \
   # add nftables
   apk add --no-cache nftables && \
   # disable coredns forever
-  sed -i "s/if netstat/USE_COREDNS=\"false\"\nif netstat/" /etc/s6-overlay/s6-rc.d/svc-coredns/run
+  sed -i "s/if netstat/USE_COREDNS=\"false\"\nif netstat/" /etc/s6-overlay/s6-rc.d/svc-coredns/run && \
+  # **NEVER DELETE MY DEFAULT ROUTE!!!**
+  sed -i 's/ip route del default/#ip route del default/g' /etc/s6-overlay/s6-rc.d/svc-wireguard/run && \
+  true

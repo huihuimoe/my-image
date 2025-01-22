@@ -82,3 +82,4 @@ experimental image of [different ssl library support on nginx](https://github.co
   1. Remove useless coredns server. (-60MB)
   2. Use iptables-nft instead of iptables-legacy.
   3. Add nftables package. So that more modern `nft` can be used.
+  4. Never delete the default route.
