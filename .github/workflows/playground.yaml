@@ -1,0 +1,25 @@
+name: Playground Workflow
+
+on:
+  workflow_dispatch:
+    inputs: {}
+
+jobs:
+  play:
+    runs-on: ubuntu-24.04-arm
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: play
+        run: |
+          set -ex
+          echo "HOME: $HOME"
+          echo "PATH: $PATH"
+          env
+          ls -alh /dev
+          ls -alh /usr/bin
+          ls -alh /usr/sbin
+          command -v qemu-system-aarch64 || true
+          
