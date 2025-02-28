@@ -21,8 +21,8 @@ jobs:
           ls -alh /dev
           ls -alh /usr/bin
           ls -alh /usr/sbin
-          lscpu
           sudo apt-get update -qq
           sudo apt-get install -y qemu-system-arm qemu-efi-aarch64
+          lscpu
           qemu-system-aarch64 -accel help
-          
+          qemu-system-aarch64 -machine virt -cpu host -accel kvm
