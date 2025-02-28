@@ -25,4 +25,4 @@ jobs:
           sudo apt-get install -y qemu-system-arm qemu-efi-aarch64
           lscpu
           qemu-system-aarch64 -accel help
-          qemu-system-aarch64 -machine virt -cpu host -accel kvm
+          qemu-system-aarch64 -machine virt -cpu host -accel kvm || true
