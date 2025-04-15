@@ -75,6 +75,8 @@ experimental image of [different ssl library support on nginx](https://github.co
 
 ## [linuxserver-wireguard](https://github.com/linuxserver/docker-wireguard)
 
+This is a customized version of linuxserver-wireguard, the original image is intended to provide out-of-the-box wireguard server and client under bridge network. This version is intended to provide more customization options to make it work as much as possible under the host network without harmful effects on the host. If you have advanced routing protocols or tunneling needs, try using this, which is compatible with frr/bird container.
+
 - Package: <https://github.com/huihuimoe/my-image/pkgs/container/my-image%2Fwireguard>
 - Size: ~38MB(Base on [Alpine modified by linuxserver](https://github.com/linuxserver/docker-baseimage-alpine))
 - Run: See [linuxserver's docs](https://github.com/linuxserver/docker-wireguard?tab=readme-ov-file#usage) `podman pull ghcr.io/huihuimoe/my-image/wireguard`
@@ -82,4 +84,4 @@ experimental image of [different ssl library support on nginx](https://github.co
   1. Remove useless coredns server. (-60MB)
   2. Use iptables-nft instead of iptables-legacy.
   3. Add nftables package. So that more modern `nft` can be used.
-  4. Never delete the default route.
+  4. Never delete the default route(can use `--net host` safely).
