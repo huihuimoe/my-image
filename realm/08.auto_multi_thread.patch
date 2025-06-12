@@ -1,0 +1,27 @@
+diff --git a/src/bin.rs b/src/bin.rs
+index cab7288..d6e7102 100644
+--- a/src/bin.rs
++++ b/src/bin.rs
+@@ -104,11 +104,22 @@ fn setup_dns(dns: DnsConf) {
+ fn main() {
+     #[cfg(feature = "multi-thread")]
+     {
++        let cores_cnt = std::thread::available_parallelism().unwrap().get();
++        if cores_cnt > 1 {
++            println!("cpu cores: {}, multi-thread enabled", cores_cnt);
+         tokio::runtime::Builder::new_multi_thread()
+             .enable_all()
+             .build()
+             .unwrap()
+             .block_on(warp_run())
++        } else {
++            println!("cpu cores: {}, using single thread", cores_cnt);
++            tokio::runtime::Builder::new_current_thread()
++                .enable_all()
++                .build()
++                .unwrap()
++                .block_on(warp_run())
++        }
+     }
+ 
+     #[cfg(not(feature = "multi-thread"))]

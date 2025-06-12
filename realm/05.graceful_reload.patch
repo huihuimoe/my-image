@@ -136,8 +136,8 @@ index 147fdac..c9e563b 100644
 +        loop {
 +            hup.recv().await.expect("failed to listen for event");
 +            log::warn!("config reloading...");
-+            let workers_new = run(setup());
 +            workers.iter_mut().for_each(|w| w.abort());
++            let workers_new = run(setup());
 +            workers = workers_new;
 +        }
 +    });

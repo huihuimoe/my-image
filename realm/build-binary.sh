@@ -28,6 +28,7 @@ if [[ -d realm-src ]]; then
   patch -p1 < ../05.graceful_reload.patch
   patch -p1 < ../06.fast_fail.patch
   patch -p1 < ../07.udp_listen_unspecified.patch
+  patch -p1 < ../08.auto_multi_thread.patch
 else
   git clone https://github.com/zhboner/realm -b v$VERSION --depth=1 realm-src
   cd realm-src
@@ -38,6 +39,7 @@ else
   patch -p1 < ../05.graceful_reload.patch
   patch -p1 < ../06.fast_fail.patch
   patch -p1 < ../07.udp_listen_unspecified.patch
+  patch -p1 < ../08.auto_multi_thread.patch
 fi
 
 sed -i '0,/version/s/version = ".*/version = "'$VERSION'"/' Cargo.toml
