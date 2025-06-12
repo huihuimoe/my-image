@@ -1,0 +1,83 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index bae0c5a..8d5fea2 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -49,6 +49,7 @@ serde_json = "1"
+ 
+ # malloc
+ mimalloc = { version = "0.1", optional = true, default-features = false }
++local-ip-address = "0.6.5"
+ 
+ [target.'cfg(not(target_env = "msvc"))'.dependencies]
+ jemallocator = { version = "0.5", optional = true }
+diff --git a/src/bin.rs b/src/bin.rs
+index c9e563b..cab7288 100644
+--- a/src/bin.rs
++++ b/src/bin.rs
+@@ -1,6 +1,8 @@
+ use std::env;
++use std::net::{IpAddr, SocketAddr};
+ use cfg_if::cfg_if;
+ 
++use local_ip_address::list_afinet_netifas;
+ use realm::cmd;
+ use realm::conf::{Config, FullConf, LogConf, DnsConf, EndpointInfo};
+ use realm::ENV_CONFIG;
+@@ -144,7 +146,21 @@ fn run(endpoints: Vec<EndpointInfo>) -> Vec<tokio::task::JoinHandle<Result<(), s
+     use realm::core::tcp::run_tcp;
+     use realm::core::udp::run_udp;
+ 
+-    let mut workers = Vec::with_capacity(2 * endpoints.len());
++    // get all ips of the host
++    let network_interfaces = list_afinet_netifas().unwrap();
++    let ips = network_interfaces.iter().filter_map(|info| {
++        let ip = info.1;
++        match ip {
++            IpAddr::V4(ip) if ip.is_link_local() => None,
++            IpAddr::V4(ip) if ip.is_multicast() => None,
++            IpAddr::V6(ip) if ip.is_unicast_link_local() => None,
++            IpAddr::V6(ip) if ip.is_multicast() => None,
++            _ => Some(info),
++        }
++    }).collect::<Vec<_>>();
++
++    let cap = endpoints.len() * (ips.len() + 1);
++    let mut workers = Vec::with_capacity(cap);
+ 
+     for EndpointInfo {
+         endpoint,
+@@ -153,7 +169,33 @@ fn run(endpoints: Vec<EndpointInfo>) -> Vec<tokio::task::JoinHandle<Result<(), s
+     } in endpoints
+     {
+         if use_udp {
+-            workers.push(tokio::spawn(run_udp(endpoint.clone())));
++            let only_ipv6 = endpoint.bind_opts.ipv6_only;
++            let bind_device = endpoint.bind_opts.bind_interface.clone();
++            let lip = endpoint.laddr.ip();
++            let lport = endpoint.laddr.port();
++            if ! lip.is_unspecified() {
++                workers.push(tokio::spawn(run_udp(endpoint.clone())));
++            } else {
++                let ips = match lip {
++                    IpAddr::V4(_) => ips.clone().into_iter().filter(|(_, ip)| ip.is_ipv4()).collect::<Vec<_>>(),
++                    _ => ips.clone(),
++                };
++                ips.iter().filter_map(|(name, ip)| {
++                    if only_ipv6 && ip.is_ipv4() {
++                        return None;
++                    }
++                    if let Some(bind_device) = &bind_device {
++                        if *bind_device != *name {
++                            return None;
++                        }
++                    }
++                    Some(ip)
++                }).for_each(|ip| {
++                    let mut endpoint = endpoint.clone();
++                    endpoint.laddr = SocketAddr::new(ip.clone(), lport);
++                    workers.push(tokio::spawn(run_udp(endpoint)));
++                })
++            }
+         }
+ 
+         if !no_tcp {

@@ -64,6 +64,7 @@ experimental image of [different ssl library support on nginx](https://github.co
   4. Can retry tcp connect when failed or timeout.
   5. Support reload config file when receive SIGHUP signal.
   6. Would exit 1 when failed to start(like port has been used).
+  7. When listen on unspecified address, the udp sockets will now listen on all available IP addresses to support connections from multiple source IPs.
 
 ## [sing-box](https://github.com/SagerNet/sing-box)
 
