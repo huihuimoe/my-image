@@ -11,7 +11,7 @@ index bae0c5a..8d5fea2 100644
  [target.'cfg(not(target_env = "msvc"))'.dependencies]
  jemallocator = { version = "0.5", optional = true }
 diff --git a/src/bin.rs b/src/bin.rs
-index c9e563b..cab7288 100644
+index 5d6a2ac..661c390 100644
 --- a/src/bin.rs
 +++ b/src/bin.rs
 @@ -1,6 +1,8 @@
@@ -23,7 +23,7 @@ index c9e563b..cab7288 100644
  use realm::cmd;
  use realm::conf::{Config, FullConf, LogConf, DnsConf, EndpointInfo};
  use realm::ENV_CONFIG;
-@@ -144,7 +146,21 @@ fn run(endpoints: Vec<EndpointInfo>) -> Vec<tokio::task::JoinHandle<Result<(), s
+@@ -155,7 +157,21 @@ fn run(endpoints: Vec<EndpointInfo>) -> Vec<tokio::task::JoinHandle<Result<(), s
      use realm::core::tcp::run_tcp;
      use realm::core::udp::run_udp;
  
@@ -41,23 +41,20 @@ index c9e563b..cab7288 100644
 +        }
 +    }).collect::<Vec<_>>();
 +
-+    let cap = endpoints.len() * (ips.len() + 1);
++    let cap = endpoints.len() * (ips.len() + 2);
 +    let mut workers = Vec::with_capacity(cap);
  
      for EndpointInfo {
          endpoint,
-@@ -153,7 +169,33 @@ fn run(endpoints: Vec<EndpointInfo>) -> Vec<tokio::task::JoinHandle<Result<(), s
+@@ -164,6 +180,31 @@ fn run(endpoints: Vec<EndpointInfo>) -> Vec<tokio::task::JoinHandle<Result<(), s
      } in endpoints
      {
          if use_udp {
--            workers.push(tokio::spawn(run_udp(endpoint.clone())));
-+            let only_ipv6 = endpoint.bind_opts.ipv6_only;
-+            let bind_device = endpoint.bind_opts.bind_interface.clone();
 +            let lip = endpoint.laddr.ip();
-+            let lport = endpoint.laddr.port();
-+            if ! lip.is_unspecified() {
-+                workers.push(tokio::spawn(run_udp(endpoint.clone())));
-+            } else {
++            if lip.is_unspecified() {
++                let only_ipv6 = endpoint.bind_opts.ipv6_only;
++                let bind_device = endpoint.bind_opts.bind_interface.clone();
++                let lport = endpoint.laddr.port();
 +                let ips = match lip {
 +                    IpAddr::V4(_) => ips.clone().into_iter().filter(|(_, ip)| ip.is_ipv4()).collect::<Vec<_>>(),
 +                    _ => ips.clone(),
@@ -78,6 +75,6 @@ index c9e563b..cab7288 100644
 +                    workers.push(tokio::spawn(run_udp(endpoint)));
 +                })
 +            }
+             workers.push(tokio::spawn(run_udp(endpoint.clone())));
          }
  
-         if !no_tcp {
