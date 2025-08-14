@@ -3,6 +3,7 @@ FROM alpine
 ARG VERSION=1.1.1
 ARG TARGETOS
 ARG TARGETARCH
+ARG GOEXPERIMENT=greenteagc
 
 RUN apk add --no-cache fuse bash ca-certificates-bundle && \
     mkdir temp && \

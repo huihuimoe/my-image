@@ -19,6 +19,7 @@ RUN set -ex && \
 FROM --platform=$BUILDPLATFORM base AS builder-amd64
 ARG TARGETOS
 ARG TARGETARCH
+ARG GOEXPERIMENT=greenteagc
 RUN set -ex && \
     cd /go/juicefs && \
     env CC=x86_64-linux-gnu-gcc \
@@ -30,6 +31,7 @@ RUN set -ex && \
 FROM --platform=$BUILDPLATFORM base AS builder-arm64
 ARG TARGETOS
 ARG TARGETARCH
+ARG GOEXPERIMENT=greenteagc
 RUN set -ex && \
     cd /go/juicefs && \
     env CC=aarch64-linux-gnu-gcc \
