@@ -72,7 +72,7 @@ jobs:
           echo "GITHUB_DATE=$(date '+%Y-%m-%dT%H:%M:%S%:z')" >> $GITHUB_ENV
       - name: Extract metadata (tags, labels) for Docker
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: ${{ inputs.tags }}
