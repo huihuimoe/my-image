@@ -78,7 +78,7 @@ jobs:
           tags: ${{ inputs.tags }}
       - name: Build and push Docker image
         id: push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           network: host
           context: ${{ inputs.context }}
