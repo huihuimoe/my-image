@@ -1,0 +1,25 @@
+name: Build JuiceFS Custom
+
+on:
+  workflow_dispatch:
+    inputs:
+      juicefs-version:
+        description: 'JuiceFS custom version to use'
+        required: true
+        type: string
+        default: 'v2026061404'
+
+jobs:
+  build:
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/template.yaml
+    with:
+      pre-build-docker-hook: "./juicefs-custom/build-base-image.sh"
+      context: juicefs-custom
+      tags: ${{ inputs.juicefs-version }}
+      build-args: "VERSION=${{ inputs.juicefs-version }}"
+      platforms: linux/amd64,linux/arm64
