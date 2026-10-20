@@ -1,0 +1,467 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+
+CONFIG_DIR=/config/wg_confs
+PEERS_DIR=/config/peers
+
+TMP_DIRS=()
+
+log() { printf '[wg-helper] %s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$*" >&2; }
+die() { log "error: $*"; exit 1; }
+
+cleanup() {
+  rm -rf "${TMP_DIRS[@]}"
+}
+trap cleanup EXIT
+
+need_value() {
+  [[ $# -ge 2 ]] || die "$1 requires a value"
+}
+
+valid_iface() {
+  [[ $1 =~ ^[A-Za-z0-9_.-]{1,15}$ ]]
+}
+
+config_value() {
+  local key=$1 file=$2
+  awk -v key="$key" '
+    {
+      line = $0
+      sub(/\r$/, "", line)
+      sub(/#.*/, "", line)
+      i = index(line, "=")
+      if (i == 0) next
+      k = substr(line, 1, i - 1)
+      v = substr(line, i + 1)
+      gsub(/^[ \t]+|[ \t]+$/, "", k)
+      gsub(/^[ \t]+|[ \t]+$/, "", v)
+      if (tolower(k) == tolower(key)) { print v; exit }
+    }
+  ' "$file"
+}
+
+server_ipv4_address() {
+  local file=$1
+  awk -F= '
+    { $0 = tolower($0); sub(/#.*/, "") }
+    /^[[:space:]]*\[interface\]/ { in_iface = 1; next }
+    /^[[:space:]]*\[/ { in_iface = 0 }
+    in_iface && /^[[:space:]]*address[[:space:]]*=/ {
+      n = split($2, a, ",")
+      for (i = 1; i <= n; i++) {
+        v = a[i]
+        gsub(/[[:space:]]/, "", v)
+        if (v ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(\/[0-9]+)?$/) {
+          print v
+          exit
+        }
+      }
+    }
+  ' "$file"
+}
+
+validate_peer_name() {
+  [[ $1 =~ ^[A-Za-z0-9_-]{1,15}$ ]] ||
+    die "peer name must be 1-15 characters of A-Z a-z 0-9 _ -"
+}
+
+validate_endpoint() {
+  local endpoint=$1 port
+  if [[ $endpoint =~ ^\[([0-9A-Fa-f:]+)\]:([0-9]+)$ ]]; then
+    port=${BASH_REMATCH[2]}
+  elif [[ $endpoint =~ ^([A-Za-z0-9.-]+):([0-9]+)$ ]]; then
+    port=${BASH_REMATCH[2]}
+  else
+    die "endpoint must be host:port or [IPv6]:port, got '$endpoint'"
+  fi
+  port=$((10#$port))
+  (( port >= 1 && port <= 65535 )) || die "endpoint port is out of range: $endpoint"
+}
+
+server_config() {
+  local server=$1
+  valid_iface "$server" || die "invalid server interface: $server"
+  printf '%s' "$CONFIG_DIR/$server.conf"
+}
+
+peer_add() {
+  local name="" server=wg0 endpoint=""
+  local allowed_ips="0.0.0.0/0, ::/0"
+  local dns="" keepalive="" server_allowed=""
+
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      --server)
+        need_value "$@"
+        server=$2
+        shift 2
+        ;;
+      --endpoint)
+        need_value "$@"
+        endpoint=$2
+        shift 2
+        ;;
+      --allowed-ips)
+        need_value "$@"
+        allowed_ips=$2
+        shift 2
+        ;;
+      --dns)
+        need_value "$@"
+        dns=$2
+        shift 2
+        ;;
+      --keepalive)
+        need_value "$@"
+        keepalive=$2
+        shift 2
+        ;;
+      --server-allowed-ips)
+        need_value "$@"
+        server_allowed=$2
+        shift 2
+        ;;
+      -*)
+        die "unknown option: $1"
+        ;;
+      *)
+        [[ -z $name ]] || die "unexpected argument: $1"
+        name=$1
+        shift
+        ;;
+    esac
+  done
+
+  [[ -n $name ]] || die "usage: wg-helper peer add <name> --endpoint host:port"
+  [[ -n $endpoint ]] || die "peer add requires --endpoint"
+  validate_peer_name "$name"
+  validate_endpoint "$endpoint"
+  [[ -n $allowed_ips ]] || die "--allowed-ips must not be empty"
+  [[ $allowed_ips != *$'\n'* ]] || die "allowed IPs must be a single line"
+  [[ $dns != *$'\n'* ]] || die "DNS must be a single line"
+  [[ $server_allowed != *$'\n'* ]] || die "server allowed IPs must be a single line"
+  if [[ -n $keepalive ]]; then
+    [[ $keepalive =~ ^[0-9]+$ ]] || die "keepalive must be numeric"
+    keepalive=$((10#$keepalive))
+    (( keepalive >= 1 && keepalive <= 65535 )) || die "keepalive is out of range"
+  fi
+
+  local conf
+  conf=$(server_config "$server")
+  [[ -f $conf ]] || die "server config not found: $conf"
+  local peer_dir="$PEERS_DIR/$name"
+  [[ ! -e $peer_dir ]] || die "peer '$name' already exists: $peer_dir"
+  if grep -qxF "# wg-helper peer $name" "$conf"; then
+    die "peer '$name' is already present in $conf"
+  fi
+
+  local address
+  address=$(server_ipv4_address "$conf")
+  [[ -n $address ]] || die "server config has no IPv4 Address: $conf"
+  [[ $address == */* ]] || address="$address/24"
+  [[ $address == */24 ]] || die "peer add requires a /24 IPv4 Address in $conf (got $address)"
+  local server_ip=${address%/*}
+  local base=${server_ip%.*}
+
+  local server_priv server_pub
+  server_priv=$(config_value PrivateKey "$conf")
+  [[ -n $server_priv ]] || die "server config has no PrivateKey: $conf"
+  server_pub=$(printf '%s\n' "$server_priv" | wg pubkey)
+
+  local -A used=()
+  used[$server_ip]=1
+  local current_ip
+  while IFS= read -r current_ip; do
+    [[ -n $current_ip ]] && used[$current_ip]=1
+  done < <(
+    awk -F= '
+      { $0 = tolower($0); sub(/#.*/, "") }
+      /^[[:space:]]*allowedips[[:space:]]*=/ {
+        n = split($2, a, ",")
+        for (i = 1; i <= n; i++) {
+          v = a[i]
+          gsub(/[[:space:]]/, "", v)
+          sub(/\/.*/, "", v)
+          if (v ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) print v
+        }
+      }
+    ' "$conf"
+    local f
+    for f in "$PEERS_DIR"/*/*.conf; do
+      [[ -f $f ]] || continue
+      awk -F= '
+        { $0 = tolower($0); sub(/#.*/, "") }
+        /^[[:space:]]*address[[:space:]]*=/ {
+          n = split($2, a, ",")
+          for (i = 1; i <= n; i++) {
+            v = a[i]
+            gsub(/[[:space:]]/, "", v)
+            sub(/\/.*/, "", v)
+            if (v ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) print v
+          }
+        }
+      ' "$f"
+    done
+  )
+
+  local ip="" i
+  for i in $(seq 2 254); do
+    if [[ -z ${used[$base.$i]:-} ]]; then
+      ip="$base.$i"
+      break
+    fi
+  done
+  [[ -n $ip ]] || die "no free address in $base.0/24"
+
+  mkdir -p "$PEERS_DIR"
+  local tmp
+  tmp=$(mktemp -d "$PEERS_DIR/.tmp.XXXXXX")
+  TMP_DIRS+=("$tmp")
+  wg genkey > "$tmp/privatekey"
+  wg pubkey < "$tmp/privatekey" > "$tmp/publickey"
+  wg genpsk > "$tmp/presharedkey"
+
+  {
+    echo '[Interface]'
+    echo "Address = ${ip}/32"
+    echo "PrivateKey = $(cat "$tmp/privatekey")"
+    if [[ -n $dns ]]; then
+      echo "DNS = $dns"
+    fi
+    echo
+    echo '[Peer]'
+    echo "PublicKey = $server_pub"
+    echo "PresharedKey = $(cat "$tmp/presharedkey")"
+    echo "Endpoint = $endpoint"
+    echo "AllowedIPs = $allowed_ips"
+    if [[ -n $keepalive ]]; then
+      echo "PersistentKeepalive = $keepalive"
+    fi
+  } > "$tmp/$name.conf"
+  wg-quick strip "$tmp/$name.conf" >/dev/null || die "generated peer config failed validation"
+
+  local server_tmp_dir
+  server_tmp_dir=$(mktemp -d "$CONFIG_DIR/.wg-helper.XXXXXX")
+  TMP_DIRS+=("$server_tmp_dir")
+  local server_tmp="$server_tmp_dir/${server}.conf"
+  cp -f "$conf" "$server_tmp"
+  {
+    echo
+    echo '[Peer]'
+    echo "# wg-helper peer $name"
+    echo "PublicKey = $(cat "$tmp/publickey")"
+    echo "PresharedKey = $(cat "$tmp/presharedkey")"
+    if [[ -n $server_allowed ]]; then
+      echo "AllowedIPs = ${ip}/32,${server_allowed}"
+    else
+      echo "AllowedIPs = ${ip}/32"
+    fi
+  } >> "$server_tmp"
+  wg-quick strip "$server_tmp" >/dev/null || die "generated server config failed validation"
+
+  mv "$tmp" "$peer_dir"
+  if ! mv "$server_tmp" "$conf"; then
+    rm -rf "$peer_dir"
+    die "failed to update $conf"
+  fi
+
+  if ! qrencode -t ansiutf8 -o "$peer_dir/$name.qr" < "$peer_dir/$name.conf"; then
+    log "warning: failed to write QR for $name"
+  fi
+
+  log "peer '$name' added: ip=$ip conf=$peer_dir/$name.conf"
+  log "review $conf and $peer_dir/$name.conf, then run: wgctl reload $server"
+}
+
+peer_remove() {
+  local name="" server=wg0 purge=0
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      --server)
+        need_value "$@"
+        server=$2
+        shift 2
+        ;;
+      --purge)
+        purge=1
+        shift
+        ;;
+      -*)
+        die "unknown option: $1"
+        ;;
+      *)
+        [[ -z $name ]] || die "unexpected argument: $1"
+        name=$1
+        shift
+        ;;
+    esac
+  done
+  [[ -n $name ]] || die "usage: wg-helper peer remove <name>"
+  validate_peer_name "$name"
+
+  local conf peer_dir
+  conf=$(server_config "$server")
+  [[ -f $conf ]] || die "server config not found: $conf"
+  peer_dir="$PEERS_DIR/$name"
+
+  if grep -qxF "# wg-helper peer $name" "$conf"; then
+    local tmp_dir
+    tmp_dir=$(mktemp -d "$CONFIG_DIR/.wg-helper.XXXXXX")
+    TMP_DIRS+=("$tmp_dir")
+    local tmp="$tmp_dir/${server}.conf"
+    awk -v name="$name" '
+      /^\[/ {
+        if (block != "") {
+          if (!skip) printf "%s", block
+          block = ""
+          skip = 0
+        }
+        line = $0
+        sub(/\r$/, "", line)
+        block = $0 "\n"
+        in_peer = (tolower(line) == "[peer]")
+        next
+      }
+      {
+        line = $0
+        sub(/\r$/, "", line)
+        block = block $0 "\n"
+        if (in_peer && line == "# wg-helper peer " name) skip = 1
+      }
+      END {
+        if (block != "" && !skip) printf "%s", block
+      }
+    ' "$conf" > "$tmp"
+    wg-quick strip "$tmp" >/dev/null ||
+      die "removing peer '$name' produced an invalid server config"
+    mv "$tmp" "$conf" || die "failed to update $conf"
+    log "peer '$name' removed from $conf"
+    log "review $conf, then run: wgctl reload $server"
+  else
+    log "peer '$name' is not present in $conf"
+  fi
+
+  if [[ $purge -eq 1 ]]; then
+    if [[ -d $peer_dir ]]; then
+      rm -rf "$peer_dir"
+      log "removed $peer_dir"
+    fi
+  elif [[ -d $peer_dir ]]; then
+    log "peer files kept in $peer_dir (use --purge to delete)"
+  fi
+}
+
+peer_qr() {
+  local target=""
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      -*)
+        die "unknown option: $1"
+        ;;
+      *)
+        [[ -z $target ]] || die "unexpected argument: $1"
+        target=$1
+        shift
+        ;;
+    esac
+  done
+  [[ -n $target ]] || die "usage: wg-helper peer qr <name|config>"
+
+  local conf
+  if [[ -f $target ]]; then
+    conf=$target
+  else
+    conf="$PEERS_DIR/$target/$target.conf"
+  fi
+  [[ -f $conf ]] || die "peer config not found: $conf"
+  qrencode -t ansiutf8 < "$conf"
+}
+
+peer_list() {
+  local server=wg0
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      --server)
+        need_value "$@"
+        server=$2
+        shift 2
+        ;;
+      -*)
+        die "unknown option: $1"
+        ;;
+      *)
+        die "unexpected argument: $1"
+        ;;
+    esac
+  done
+  local conf
+  conf=$(server_config "$server")
+  [[ -f $conf ]] || die "server config not found: $conf"
+
+  local count=0 dir name peer_conf address ip membership
+  for dir in "$PEERS_DIR"/*/; do
+    [[ -d $dir ]] || continue
+    name=$(basename "$dir")
+    peer_conf="$dir/$name.conf"
+    [[ -f $peer_conf ]] || continue
+    address=$(server_ipv4_address "$peer_conf")
+    ip=${address%/*}
+    membership=no
+    if grep -qxF "# wg-helper peer $name" "$conf"; then
+      membership=yes
+    fi
+    printf '%-20s %-16s server=%s\n' "$name" "${ip:-?}" "$membership"
+    count=$((count + 1))
+  done
+  (( count > 0 )) || log "no managed peers in $PEERS_DIR"
+}
+
+peer_cmd() {
+  local sub=${1:-help}
+  shift || true
+  case $sub in
+    add) peer_add "$@" ;;
+    remove|rm) peer_remove "$@" ;;
+    qr) peer_qr "$@" ;;
+    list|ls) peer_list "$@" ;;
+    help|-h|--help) usage ;;
+    *)
+      usage >&2
+      exit 1
+      ;;
+  esac
+}
+
+usage() {
+  cat <<'EOF'
+wg-helper - optional peer helpers
+
+Usage: wg-helper <group> <command> [options]
+
+Peer:
+  peer add <name> --endpoint host:port [--server wg0]
+                  [--allowed-ips "0.0.0.0/0, ::/0"] [--dns 1.1.1.1]
+                  [--keepalive 25] [--server-allowed-ips 192.168.50.0/24]
+  peer remove <name> [--server wg0] [--purge]
+  peer qr <name|config>
+  peer list [--server wg0]
+
+Peer files: /config/peers/<name>/<name>.conf
+EOF
+}
+
+main() {
+  local group=${1:-help}
+  shift || true
+  case $group in
+    peer) peer_cmd "$@" ;;
+    help|-h|--help) usage ;;
+    *)
+      usage >&2
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"

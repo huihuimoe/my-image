@@ -45,7 +45,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
         with:
-          submodules: recursive
           lfs: true
       - name: Run pre-build Docker hook
         if: inputs.pre-build-docker-hook != ''

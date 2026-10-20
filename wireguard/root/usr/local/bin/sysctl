@@ -1,0 +1,24 @@
+#!/bin/sh
+skipped=0
+keys=0
+for arg do
+  shift
+  case "$arg" in
+    net.ipv4.conf.all.src_valid_mark=1)
+      skipped=1
+      continue
+      ;;
+    -*) ;;
+    *) keys=1 ;;
+  esac
+  set -- "$@" "$arg"
+done
+
+if [ "$skipped" = 1 ]; then
+  value=$(/sbin/sysctl -n net.ipv4.conf.all.src_valid_mark 2>/dev/null || printf 'unknown')
+  if [ "$value" != 1 ]; then
+    printf '[wgctl] refusing to change net.ipv4.conf.all.src_valid_mark (currently %s); set it on the host if needed\n' "$value" >&2
+  fi
+  [ "$keys" = 1 ] || exit 0
+fi
+exec /sbin/sysctl "$@"

@@ -1,4 +1,4 @@
-name: Build linuxserver/wireguard
+name: Build WireGuard
 
 on:
   workflow_dispatch:

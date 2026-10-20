@@ -1,3 +1,0 @@
-[submodule "wireguard/linuxserver-wireguard"]
-	path = wireguard/linuxserver-wireguard
-	url = https://github.com/linuxserver/docker-wireguard
