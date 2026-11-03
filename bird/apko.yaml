@@ -1,0 +1,41 @@
+contents:
+  keyring:
+    - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+  repositories:
+    - https://packages.wolfi.dev/os
+  packages:
+    - wolfi-baselayout
+    - ca-certificates-bundle
+    # The release workflow replaces this pin with the detected version.
+    - bird=3.4.0-r2
+
+entrypoint:
+  command: /usr/bin/bird
+cmd: -f -R -c /etc/bird/bird.conf
+
+accounts:
+  run-as: '0'
+
+environment:
+  PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+paths:
+  - path: /etc/bird
+    type: directory
+    permissions: 0o755
+  - path: /etc/bird/bird.conf
+    type: symlink
+    source: /etc/bird.conf
+  - path: /run
+    type: directory
+    permissions: 0o755
+
+archs:
+  - amd64
+  - arm64
+
+annotations:
+  org.opencontainers.image.title: BIRD
+  org.opencontainers.image.description: BIRD 3 routing daemon on Wolfi, assembled with apko
+  org.opencontainers.image.source: https://github.com/huihuimoe/my-image
+  org.opencontainers.image.licenses: GPL-2.0-or-later

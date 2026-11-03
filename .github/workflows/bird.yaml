@@ -1,0 +1,91 @@
+name: BIRD
+
+on:
+  schedule:
+    - cron: '23 4 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Rebuild even if the latest BIRD package was already published
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bird-release
+  cancel-in-progress: false
+
+env:
+  # renovate: datasource=docker depName=cgr.dev/chainguard/apko
+  APKO_IMAGE: cgr.dev/chainguard/apko@sha256:d6c63be291b6c6a8fe37cb9b5d656e84db4f209983e38f1f18d2c233b9f60e04
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: Resolve image name
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}/bird" >> "$GITHUB_ENV"
+      - name: Detect new BIRD 3 package
+        id: version
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          args=(--image "$IMAGE")
+          if [[ "$FORCE" == true ]]; then args+=(--force); fi
+          python3 bird/check-version.py "${args[@]}"
+      - name: Lock dependencies for both architectures
+        if: steps.version.outputs.build == 'true'
+        run: |
+          mkdir -p bird-output/sboms bird-output/cache
+          apko=(docker run --rm --mount "type=bind,src=$PWD,dst=/work" "$APKO_IMAGE")
+          "${apko[@]}" lock bird.resolved.yaml --output bird-output/apko.lock.json \
+            --cache-dir /work/bird-output/cache
+      - name: Log in to GHCR
+        if: steps.version.outputs.build == 'true'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish multi-architecture image
+        if: steps.version.outputs.build == 'true'
+        env:
+          PACKAGE_VERSION: ${{ steps.version.outputs.version }}
+          BIRD_VERSION: ${{ steps.version.outputs.upstream }}
+        run: |
+          docker run --rm \
+            --mount "type=bind,src=$PWD,dst=/work" \
+            --mount "type=bind,src=$HOME/.docker,dst=/docker-config,readonly" \
+            -e DOCKER_CONFIG=/docker-config \
+            "$APKO_IMAGE" publish bird.resolved.yaml \
+            "$IMAGE:$BIRD_VERSION" "$IMAGE:3" "$IMAGE:latest" "$IMAGE:$PACKAGE_VERSION" \
+            --lockfile bird-output/apko.lock.json --cache-dir /work/bird-output/cache \
+            --sbom-path /work/bird-output/sboms --image-refs bird-output/image-refs.txt
+      - name: Save release metadata
+        if: always() && steps.version.outputs.build == 'true'
+        uses: actions/upload-artifact@v6
+        with:
+          name: bird-${{ steps.version.outputs.version }}
+          path: |
+            bird.resolved.yaml
+            bird-output/apko.lock.json
+            bird-output/sboms/
+            bird-output/image-refs.txt
+      - name: Report result
+        env:
+          PACKAGE_VERSION: ${{ steps.version.outputs.version }}
+          BUILD: ${{ steps.version.outputs.build }}
+        run: |
+          if [[ "$BUILD" == true ]]; then
+            echo "Published $IMAGE:$PACKAGE_VERSION (amd64 + arm64)." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "$IMAGE:$PACKAGE_VERSION already exists; skipped." >> "$GITHUB_STEP_SUMMARY"
+          fi

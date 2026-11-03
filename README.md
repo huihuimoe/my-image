@@ -4,6 +4,14 @@ Some examples to build Docker images.
 
 TLDR:
 
+## [BIRD 3](https://bird.nic.cz/)
+
+- Package: `ghcr.io/huihuimoe/my-image/bird`
+- Platforms: `linux/amd64`, `linux/arm64`
+- Official Wolfi package with libssh support, assembled with apko.
+- Daily release detection and manual publishing; no PR workflow.
+- [Configuration, usage, and release details](bird/README.md).
+
 ## [GOST V2](https://v2.gost.run/en/)
 
 - Package: <https://github.com/huihuimoe/my-image/pkgs/container/my-image%2Fgost2>
