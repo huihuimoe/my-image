@@ -71,7 +71,7 @@ jobs:
             --sbom-path /work/bird-output/sboms --image-refs bird-output/image-refs.txt
       - name: Save release metadata
         if: always() && steps.version.outputs.build == 'true'
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: bird-${{ steps.version.outputs.version }}
           path: |
