@@ -2,6 +2,7 @@
 """Find the newest stable BIRD 3 package shared by both Wolfi architectures."""
 
 import argparse
+import hashlib
 import io
 import json
 import os
@@ -73,16 +74,30 @@ def published(image, version):
         page += 1
 
 
+def build_tag(version):
+    directory = Path(__file__).resolve().parent
+    patches = sorted((directory / "patches").glob("*.patch"))
+    if not patches:
+        raise RuntimeError("No BIRD patches found")
+    digest = hashlib.sha256()
+    for path in [directory / "Dockerfile", *patches]:
+        digest.update(path.name.encode() + b"\0")
+        digest.update(path.read_bytes())
+    return f"{version}-p{digest.hexdigest()[:12]}"
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image", help="Check whether this GHCR image already has the version tag")
     parser.add_argument("--force", action="store_true", help="Rebuild even if the version was published")
     args = parser.parse_args()
     version = latest_version()
-    build = args.force or not args.image or not published(args.image, version)
+    tag = build_tag(version)
+    build = args.force or not args.image or not published(args.image, tag)
     outputs = {
         "version": version,
         "upstream": version.split("-r")[0],
+        "tag": tag,
         "build": str(build).lower(),
     }
     for key, value in outputs.items():
@@ -91,12 +106,6 @@ def main():
         with open(os.environ["GITHUB_OUTPUT"], "a") as output:
             for key, value in outputs.items():
                 output.write(f"{key}={value}\n")
-    if build:
-        config = Path(__file__).with_name("apko.yaml").read_text()
-        config, count = re.subn(r"bird=3\.\d+\.\d+-r\d+", f"bird={version}", config)
-        if count != 1:
-            raise RuntimeError("Expected exactly one BIRD package pin")
-        Path("bird.resolved.yaml").write_text(config)
 
 
 if __name__ == "__main__":

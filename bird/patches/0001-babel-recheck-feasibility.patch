@@ -1,0 +1,110 @@
+Subject: babel: Recheck and refresh candidate feasibility
+
+Based on the upstream selection-time fix: https://www.mail-archive.com/bird-users@network.cz/msg09403.html
+
+Also refresh candidates when the source records constraining them expire.
+
+diff --git a/proto/babel/babel.c b/proto/babel/babel.c
+index 0b1fc237c..0a0f6e93f 100644
+--- a/proto/babel/babel.c
++++ b/proto/babel/babel.c
+@@ -61,6 +61,7 @@ static inline int gt_mod64k(uint a, uint b)
+ 
+ static void babel_expire_requests(struct babel_proto *p, struct babel_entry *e);
+ static void babel_select_route(struct babel_proto *p, struct babel_entry *e, struct babel_route *mod);
++static int babel_expire_source_routes(struct babel_entry *e, struct babel_source *s);
+ static inline void babel_announce_retraction(struct babel_proto *p, struct babel_entry *e);
+ static void babel_send_route_request(struct babel_proto *p, struct babel_entry *e, struct babel_neighbor *n);
+ static void babel_send_seqno_request(struct babel_proto *p, struct babel_entry *e, struct babel_seqno_request *sr, struct babel_neighbor *n);
+@@ -131,20 +132,24 @@ babel_get_source(struct babel_proto *p, struct babel_entry *e, u64 router_id,
+   return s;
+ }
+ 
+-static void
++static int
+ babel_expire_sources(struct babel_proto *p UNUSED, struct babel_entry *e)
+ {
+   struct babel_source *n, *nx;
+   btime now_ = current_time();
++  int reselect = 0;
+ 
+   WALK_LIST_DELSAFE(n, nx, e->sources)
+   {
+     if (n->expires && n->expires <= now_)
+     {
++      reselect |= babel_expire_source_routes(e, n);
+       rem_node(NODE n);
+       sl_free(n);
+     }
+   }
++
++  return reselect;
+ }
+ 
+ static struct babel_route *
+@@ -280,7 +285,12 @@ loop:
+       goto loop;
+     }
+ 
+-    babel_expire_sources(p, e);
++    if (babel_expire_sources(p, e))
++    {
++      FIB_ITERATE_PUT(&fit);
++      babel_select_route(p, e, NULL);
++      goto loop;
++    }
+     babel_expire_requests(p, e);
+ 
+     /* Remove empty entries */
+@@ -577,6 +587,33 @@ babel_is_feasible(struct babel_source *s, u16 seqno, u16 metric)
+     ((seqno == s->seqno) && (metric < s->metric));
+ }
+ 
++static inline int
++babel_route_feasible(struct babel_entry *e, struct babel_route *r)
++{
++  return r->feasible &&
++    babel_is_feasible(babel_find_source(e, r->router_id), r->seqno, r->advert_metric);
++}
++
++static int
++babel_expire_source_routes(struct babel_entry *e, struct babel_source *s)
++{
++  struct babel_route *r;
++  int reselect = 0;
++
++  /* A route can become feasible when the source that constrained it expires. */
++  WALK_LIST(r, e->routes)
++    if ((r != e->selected) && (r->router_id == s->router_id) &&
++        (r->metric < BABEL_INFINITY) &&
++        (!r->feasible || !babel_is_feasible(s, r->seqno, r->advert_metric)))
++    {
++      r->feasible = 1;
++      if (!e->selected || (r->metric < e->selected->metric))
++        reselect = 1;
++    }
++
++  return reselect;
++}
++
+ /* Simple additive metric - Appendix 3.1 in the RFC */
+ static inline u16
+ babel_compute_metric(struct babel_neighbor *n, uint metric)
+@@ -803,7 +840,7 @@ babel_select_route(struct babel_proto *p, struct babel_entry *e, struct babel_ro
+   if (mod && (mod != best))
+   {
+     /* Either select modified route, or keep old best route */
+-    if ((mod->metric < (best ? best->metric : BABEL_INFINITY)) && mod->feasible)
++    if ((mod->metric < (best ? best->metric : BABEL_INFINITY)) && babel_route_feasible(e, mod))
+       best = mod;
+     else
+       return;
+@@ -816,7 +853,7 @@ babel_select_route(struct babel_proto *p, struct babel_entry *e, struct babel_ro
+ 
+     /* Find the best feasible route from all routes */
+     WALK_LIST(r, e->routes)
+-      if ((r->metric < (best ? best->metric : BABEL_INFINITY)) && r->feasible)
++      if ((r->metric < (best ? best->metric : BABEL_INFINITY)) && babel_route_feasible(e, r))
+ 	best = r;
+   }
+ 

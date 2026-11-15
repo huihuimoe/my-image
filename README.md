@@ -8,8 +8,8 @@ TLDR:
 
 - Package: `ghcr.io/huihuimoe/my-image/bird`
 - Platforms: `linux/amd64`, `linux/arm64`
-- Official Wolfi package with libssh support, assembled with apko.
-- Daily release detection and manual publishing; no PR workflow.
+- Wolfi-based image with BIRD built from source, downstream patches, and libssh.
+- Checks for new releases every three days.
 - [Configuration, usage, and release details](bird/README.md).
 
 ## [GOST V2](https://v2.gost.run/en/)

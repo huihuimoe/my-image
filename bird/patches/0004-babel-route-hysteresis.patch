@@ -1,0 +1,724 @@
+Subject: babel: Add route metric hysteresis
+
+Add optional per-route smoothing, selection, reload support, and CLI monitoring.
+
+diff --git a/doc/bird.sgml b/doc/bird.sgml
+index 03d0992e2..e8dedf7c1 100644
+--- a/doc/bird.sgml
++++ b/doc/bird.sgml
+@@ -2593,15 +2593,16 @@ with specific (non-zero) source prefix.
+ <p>The Babel protocol support both IPv4 and IPv6 channels; both can be
+ configured simultaneously. It can also be configured with <ref
+ id="ip-sadr-routes" name="IPv6 SADR"> channel instead of regular IPv6
+-channel, in such case SADR support is enabled. Babel supports no global
+-configuration options apart from those common to all other protocols, but
+-supports the following per-interface configuration options:
++channel, in such case SADR support is enabled. Babel supports the following
++protocol and per-interface configuration options:
+ 
+ <code>
+ protocol babel [<name>] {
+ 	ipv4 { <channel config> };
+ 	ipv6 [sadr] { <channel config> };
+ 	randomize router id <switch>;
++	hysteresis <switch>;
++	hysteresis time <time>;
+ 	interface <interface pattern> {
+ 		type wired|wireless|tunnel;
+ 		rxcost <number>;
+@@ -2653,6 +2654,17 @@ protocol babel [<name>] {
+       router ID every time it starts up, which avoids this problem at the cost
+       of not having stable router IDs in the network. Default: no.
+ 
++      <tag><label id="babel-hysteresis">hysteresis <m/switch/</tag>
++      Enable route selection hysteresis. A reachable selected route is replaced
++      only when another feasible route has both a lower current metric and a
++      lower smoothed metric. A failed route is replaced immediately. This does
++      not change metrics advertised to neighbors. Default: no.
++
++      <tag><label id="babel-hysteresis-time">hysteresis time <m/time/ s|ms|us</tag>
++      Set the positive time constant for smoothing each route's metric.
++      The value is shared by the protocol's interfaces and does not follow
++      their Hello intervals. Default: 12 s.
++
+       <tag><label id="babel-type">type wired|wireless|tunnel </tag>
+       This option specifies the interface type: Wired, wireless or tunnel. On
+       wired interfaces a neighbor is considered unreachable after a small number
+@@ -2792,6 +2804,16 @@ protocol babel [<name>] {
+       key size used by the selected algorithm.
+ </descrip>
+ 
++<sect1>Monitoring
++<label id="babel-monitoring">
++
++<p><cf/show babel routes/ shows each route's smoothed metric when hysteresis is
++enabled. The <cf/+/ marker indicates a currently feasible candidate and <cf/*/
++indicates the selected route. <cf/show babel entries/ shows the last selection
++reason and the number of changes between reachable next hops for each prefix.
++Initial selection and withdrawal are not counted; the counter is reset when
++the prefix entry is removed or the protocol restarts.
++
+ <sect1>Attributes
+ <label id="babel-attr">
+ 
+diff --git a/proto/babel/babel.c b/proto/babel/babel.c
+index df04dd01b..b7155d829 100644
+--- a/proto/babel/babel.c
++++ b/proto/babel/babel.c
+@@ -60,7 +60,8 @@ static inline int gt_mod64k(uint a, uint b)
+ { return ge_mod64k(a, b) && a != b; }
+ 
+ static void babel_expire_requests(struct babel_proto *p, struct babel_entry *e);
+-static void babel_select_route(struct babel_proto *p, struct babel_entry *e, struct babel_route *mod);
++static void babel_select_route(struct babel_proto *p, struct babel_entry *e, struct babel_route *mod, const ip_addr *old_nexthop);
++static int babel_hysteresis_due(struct babel_proto *p, struct babel_entry *e);
+ static int babel_expire_source_routes(struct babel_entry *e, struct babel_source *s);
+ static inline void babel_announce_retraction(struct babel_proto *p, struct babel_entry *e);
+ static void babel_send_route_request(struct babel_proto *p, struct babel_entry *e, struct babel_neighbor *n);
+@@ -186,9 +187,10 @@ static inline void
+ babel_retract_route(struct babel_proto *p, struct babel_route *r)
+ {
+   r->metric = r->advert_metric = BABEL_INFINITY;
++  r->smoothed_valid = 0;
+ 
+   if (r == r->e->selected)
+-    babel_select_route(p, r->e, r);
++    babel_select_route(p, r->e, r, NULL);
+ }
+ 
+ static void
+@@ -217,6 +219,7 @@ babel_expire_route(struct babel_proto *p, struct babel_route *r)
+   if (r->metric < BABEL_INFINITY)
+   {
+     r->metric = r->advert_metric = BABEL_INFINITY;
++    r->smoothed_valid = 0;
+     r->expires = current_time() + cf->hold_time;
+   }
+   else
+@@ -269,7 +272,14 @@ loop:
+        * babel_rt_notify() -> rtable change, invalidating hidden variables.
+        */
+       FIB_ITERATE_PUT(&fit);
+-      babel_select_route(p, e, NULL);
++      babel_select_route(p, e, NULL, NULL);
++      goto loop;
++    }
++
++    if (cf->hysteresis && e->hysteresis_pending && babel_hysteresis_due(p, e))
++    {
++      FIB_ITERATE_PUT(&fit);
++      babel_select_route(p, e, NULL, NULL);
+       goto loop;
+     }
+ 
+@@ -288,7 +298,7 @@ loop:
+     if (babel_expire_sources(p, e))
+     {
+       FIB_ITERATE_PUT(&fit);
+-      babel_select_route(p, e, NULL);
++      babel_select_route(p, e, NULL, NULL);
+       goto loop;
+     }
+     babel_expire_requests(p, e);
+@@ -607,6 +617,7 @@ babel_expire_source_routes(struct babel_entry *e, struct babel_source *s)
+         (!r->feasible || !babel_is_feasible(s, r->seqno, r->advert_metric)))
+     {
+       r->feasible = 1;
++      r->smoothed_valid = 0;
+       if (!e->selected || (r->metric < e->selected->metric))
+         reselect = 1;
+     }
+@@ -614,6 +625,124 @@ babel_expire_source_routes(struct babel_entry *e, struct babel_source *s)
+   return reselect;
+ }
+ 
++static void
++babel_smooth_route(struct babel_route *r, btime tau, btime now_)
++{
++  u32 target = (u32) r->metric << BABEL_SMOOTH_SHIFT;
++
++  if (!r->smoothed_valid)
++  {
++    r->smoothed_metric = target;
++    r->smoothed_at = now_;
++    r->smoothed_valid = 1;
++    return;
++  }
++
++  if (r->smoothed_metric == target)
++  {
++    r->smoothed_at = now_;
++    return;
++  }
++
++  btime elapsed = now_ - r->smoothed_at;
++  if (elapsed <= 0)
++    return;
++
++  u64 whole = elapsed / tau;
++  if (whole >= 32)
++  {
++    r->smoothed_metric = target;
++    r->smoothed_at = now_;
++    return;
++  }
++
++  u64 remainder = elapsed % tau;
++  u64 divisor = tau;
++  while (divisor > (UINT64_MAX >> 24))
++  {
++    divisor >>= 1;
++    remainder >>= 1;
++  }
++
++  u64 x = (whole << 24) + ((remainder << 24) / divisor);
++  u64 denom = (1ULL << 24) + (x >> 6);
++  u64 decay = (1ULL << 56) / denom;
++
++  /* Approximate exp(-elapsed/tau) as (1 + elapsed/(64*tau))^-64. */
++  if (decay == (1ULL << 32))
++    return;
++  for (uint i = 0; i < 6; i++)
++    decay = (decay * decay) >> 32;
++
++  s64 diff = (s64) target - r->smoothed_metric;
++  u64 magnitude = (diff < 0) ? -diff : diff;
++  u32 change = (magnitude * ((1ULL << 32) - decay)) >> 32;
++
++  /* Keep fractional elapsed time when the fixed-point value cannot move yet. */
++  if (!change)
++    return;
++
++  if (diff < 0)
++    r->smoothed_metric -= change;
++  else
++    r->smoothed_metric += change;
++  r->smoothed_at = now_;
++}
++
++static inline void
++babel_smooth_before_change(struct babel_config *cf, struct babel_route *r, btime now_)
++{
++  if (cf->hysteresis && r->smoothed_valid)
++  {
++    babel_smooth_route(r, cf->hysteresis_time, now_);
++    r->smoothed_at = now_;
++  }
++}
++
++static inline void
++babel_smooth_after_change(struct babel_config *cf, struct babel_route *r, btime now_)
++{
++  if (!cf->hysteresis)
++    return;
++
++  if ((r->metric == BABEL_INFINITY) || !r->feasible)
++    r->smoothed_valid = 0;
++  else if (!r->smoothed_valid)
++    babel_smooth_route(r, cf->hysteresis_time, now_);
++}
++
++static int
++babel_hysteresis_due(struct babel_proto *p, struct babel_entry *e)
++{
++  struct babel_config *cf = (void *) p->p.cf;
++  struct babel_route *selected = e->selected, *r;
++  btime now_ = current_time();
++
++  e->hysteresis_pending = 0;
++  if (!selected || (selected->metric == BABEL_INFINITY) || !selected->feasible)
++    return 1;
++
++  babel_smooth_route(selected, cf->hysteresis_time, now_);
++  WALK_LIST(r, e->routes)
++  {
++    if ((r == selected) || (r->metric >= selected->metric))
++      continue;
++
++    if (!babel_route_feasible(e, r))
++    {
++      r->smoothed_valid = 0;
++      continue;
++    }
++
++    babel_smooth_route(r, cf->hysteresis_time, now_);
++    if (r->smoothed_metric < selected->smoothed_metric)
++      return 1;
++    e->hysteresis_pending = 1;
++  }
++
++  return 0;
++}
++
+ /* Simple additive metric - Appendix 3.1 in the RFC */
+ static inline u16
+ babel_compute_metric(struct babel_neighbor *n, uint metric)
+@@ -625,6 +754,7 @@ static void
+ babel_update_cost(struct babel_neighbor *nbr)
+ {
+   struct babel_proto *p = nbr->ifa->proto;
++  struct babel_config *pcf = (void *) p->p.cf;
+   struct babel_iface_config *cf = nbr->ifa->cf;
+   uint rcv = u32_popcount(nbr->hello_map); // number of bits set
+   uint max = nbr->hello_cnt;
+@@ -703,8 +833,17 @@ done:
+     struct babel_route *r; node *n;
+     WALK_LIST2(r, n, nbr->routes, neigh_route)
+     {
+-      r->metric = babel_compute_metric(nbr, r->advert_metric);
+-      babel_select_route(p, r->e, r);
++      u16 metric = babel_compute_metric(nbr, r->advert_metric);
++      if (pcf->hysteresis && (metric != r->metric))
++      {
++        btime now_ = current_time();
++        babel_smooth_before_change(pcf, r, now_);
++        r->metric = metric;
++        babel_smooth_after_change(pcf, r, now_);
++      }
++      else
++        r->metric = metric;
++      babel_select_route(p, r->e, r, NULL);
+     }
+   }
+ }
+@@ -808,11 +947,12 @@ babel_announce_retraction(struct babel_proto *p, struct babel_entry *e)
+  * @p: Babel protocol instance
+  * @e: Babel entry to select the best route for
+  * @mod: Babel route that was modified or NULL if unspecified
++ * @old_nexthop: previous next hop if @mod is the selected route
+  *
+  * Select the best reachable and feasible route for a given prefix among the
+- * routes received from peers, and propagate it to the nest. This just selects
+- * the reachable and feasible route with the lowest metric, but keeps selected
+- * the old one in case of tie.
++ * routes received from peers, and propagate it to the nest. When hysteresis is
++ * enabled, a candidate must also have a lower smoothed metric than the current
++ * route. In case of a tie the current route is retained.
+  *
+  * If no feasible route is available for a prefix that previously had a route
+  * selected, a seqno request is sent to try to get a valid route. If the entry
+@@ -832,31 +972,76 @@ babel_announce_retraction(struct babel_proto *p, struct babel_entry *e)
+  * babel_rt_notify() when the change is propagated back to Babel.
+  */
+ static void
+-babel_select_route(struct babel_proto *p, struct babel_entry *e, struct babel_route *mod)
++babel_select_route(struct babel_proto *p, struct babel_entry *e, struct babel_route *mod,
++                   const ip_addr *old_nexthop)
+ {
+-  struct babel_route *r, *best = e->selected;
++  struct babel_config *cf = (void *) p->p.cf;
++  struct babel_route *r, *old = e->selected, *best = old;
++  int old_usable = old && (old->metric < BABEL_INFINITY) && old->feasible;
+ 
+-  /* Shortcut if only non-best was modified */
+-  if (mod && (mod != best))
++  if (cf->hysteresis)
+   {
+-    /* Either select modified route, or keep old best route */
+-    if ((mod->metric < (best ? best->metric : BABEL_INFINITY)) && babel_route_feasible(e, mod))
+-      best = mod;
+-    else
++    if (old_usable && mod && (mod != old) && (mod->metric >= old->metric))
+       return;
++
++    btime now_ = current_time();
++    e->hysteresis_pending = 0;
++    if (old_usable)
++      babel_smooth_route(old, cf->hysteresis_time, now_);
++    else
++    {
++      if (old)
++        old->smoothed_valid = 0;
++      best = NULL;
++    }
++
++    WALK_LIST(r, e->routes)
++    {
++      if ((r == old && old_usable) || (r->metric == BABEL_INFINITY) ||
++          (old_usable && (r->metric >= old->metric)))
++        continue;
++
++      if (!babel_route_feasible(e, r))
++      {
++        r->smoothed_valid = 0;
++        continue;
++      }
++
++      babel_smooth_route(r, cf->hysteresis_time, now_);
++      if (old_usable && (r->smoothed_metric >= old->smoothed_metric))
++      {
++        e->hysteresis_pending = 1;
++        continue;
++      }
++
++      if (!best || (r->metric < best->metric))
++        best = r;
++    }
+   }
+   else
+   {
+-    /* Selected route may be modified and no longer admissible */
+-    if (!best || (best->metric == BABEL_INFINITY) || !best->feasible)
+-      best = NULL;
++    /* Shortcut if only non-best was modified */
++    if (mod && (mod != best))
++    {
++      if ((mod->metric < (best ? best->metric : BABEL_INFINITY)) && babel_route_feasible(e, mod))
++        best = mod;
++      else
++        return;
++    }
++    else
++    {
++      if (!old_usable)
++        best = NULL;
+ 
+-    /* Find the best feasible route from all routes */
+-    WALK_LIST(r, e->routes)
+-      if ((r->metric < (best ? best->metric : BABEL_INFINITY)) && babel_route_feasible(e, r))
+-	best = r;
++      WALK_LIST(r, e->routes)
++        if ((r->metric < (best ? best->metric : BABEL_INFINITY)) && babel_route_feasible(e, r))
++          best = r;
++    }
+   }
+ 
++  if ((best == old) && (!mod || (mod != old)))
++    return;
++
+   if (best)
+   {
+     if (best != e->selected)
+@@ -878,6 +1063,27 @@ babel_select_route(struct babel_proto *p, struct babel_entry *e, struct babel_ro
+   else
+     return;
+ 
++  if (old && best &&
++      ((old->neigh->ifa->iface != best->neigh->ifa->iface) ||
++       !ipa_equal(old_nexthop ? *old_nexthop : old->next_hop, best->next_hop)))
++  {
++    e->switches++;
++    if (best == old)
++      e->selection_reason = BABEL_SELECT_NEXTHOP;
++  }
++
++  if (best != old)
++  {
++    if (!best)
++      e->selection_reason = BABEL_SELECT_UNREACHABLE;
++    else if (!old)
++      e->selection_reason = BABEL_SELECT_INITIAL;
++    else if (!old_usable)
++      e->selection_reason = BABEL_SELECT_FAILURE;
++    else
++      e->selection_reason = cf->hysteresis ? BABEL_SELECT_HYSTERESIS : BABEL_SELECT_METRIC;
++  }
++
+   e->selected = best;
+   babel_announce_rte(p, e);
+ }
+@@ -1361,6 +1567,7 @@ void
+ babel_handle_update(union babel_msg *m, struct babel_iface *ifa)
+ {
+   struct babel_proto *p = ifa->proto;
++  struct babel_config *cf = (void *) p->p.cf;
+   struct babel_msg_update *msg = &m->update;
+   ASSERT_DIE(birdloop_inside(p->p.loop));
+ 
+@@ -1470,6 +1677,17 @@ babel_handle_update(union babel_msg *m, struct babel_iface *ifa)
+       (r->router_id == msg->router_id) && ipa_equal(r->next_hop, msg->next_hop))
+     return;
+ 
++  ip_addr old_nexthop = r->next_hop;
++  btime now_ = 0;
++  if (cf->hysteresis)
++  {
++    now_ = current_time();
++    babel_smooth_before_change(cf, r, now_);
++    if ((r->router_id != msg->router_id) || !ipa_equal(r->next_hop, msg->next_hop) ||
++        !r->feasible || !feasible || ((r != best) && !babel_route_feasible(e, r)))
++      r->smoothed_valid = 0;
++  }
++
+   /* Last paragraph above - update the entry */
+   r->feasible = feasible;
+   r->seqno = msg->seqno;
+@@ -1477,6 +1695,8 @@ babel_handle_update(union babel_msg *m, struct babel_iface *ifa)
+   r->advert_metric = msg->metric;
+   r->router_id = msg->router_id;
+   r->next_hop = msg->next_hop;
++  if (cf->hysteresis)
++    babel_smooth_after_change(cf, r, now_);
+ 
+   /* If received update satisfies seqno request, we send triggered updates */
+   if (babel_satisfy_seqno_request(p, e, msg->router_id, msg->seqno))
+@@ -1485,7 +1705,7 @@ babel_handle_update(union babel_msg *m, struct babel_iface *ifa)
+     e->updated = current_time();
+   }
+ 
+-  babel_select_route(p, e, r);
++  babel_select_route(p, e, r, (r == best) ? &old_nexthop : NULL);
+ }
+ 
+ void
+@@ -2358,6 +2578,9 @@ babel_show_neighbors(struct proto *P, const char *iff)
+ static void
+ babel_show_entries_(struct babel_proto *p, struct fib *rtable)
+ {
++  static const char *const reasons[] = {
++    "-", "initial", "metric", "hysteresis", "failure", "nexthop", "unreachable"
++  };
+   int width = babel_sadr_enabled(p) ? -54 : -24;
+ 
+   FIB_WALK(rtable, struct babel_entry, e)
+@@ -2373,14 +2596,17 @@ babel_show_entries_(struct babel_proto *p, struct fib *rtable)
+       srcs++;
+ 
+     if (e->valid)
+-      cli_msg(-1025, "%-*N %-23lR %6u %5u %7u %7u", width,
+-	      e->n.addr, e->router_id, e->metric, e->seqno, rts, srcs);
++      cli_msg(-1025, "%-*N %-23lR %6u %5u %7u %7u %9lu %s", width,
++	      e->n.addr, e->router_id, e->metric, e->seqno, rts, srcs,
++              e->switches, reasons[e->selection_reason]);
+     else if (r = e->selected)
+-      cli_msg(-1025, "%-*N %-23lR %6u %5u %7u %7u", width,
+-	      e->n.addr, r->router_id, r->metric, r->seqno, rts, srcs);
++      cli_msg(-1025, "%-*N %-23lR %6u %5u %7u %7u %9lu %s", width,
++	      e->n.addr, r->router_id, r->metric, r->seqno, rts, srcs,
++              e->switches, reasons[e->selection_reason]);
+     else
+-      cli_msg(-1025, "%-*N %-23s %6s %5s %7u %7u", width,
+-	      e->n.addr, "<none>", "-", "-", rts, srcs);
++      cli_msg(-1025, "%-*N %-23s %6s %5s %7u %7u %9lu %s", width,
++	      e->n.addr, "<none>", "-", "-", rts, srcs,
++              e->switches, reasons[e->selection_reason]);
+   }
+   FIB_WALK_END;
+ }
+@@ -2398,8 +2624,8 @@ babel_show_entries(struct proto *P)
+   }
+ 
+   cli_msg(-1025, "%s:", p->p.name);
+-  cli_msg(-1025, "%-*s %-23s %6s %5s %7s %7s", width,
+-	  "Prefix", "Router ID", "Metric", "Seqno", "Routes", "Sources");
++  cli_msg(-1025, "%-*s %-23s %6s %5s %7s %7s %9s %s", width,
++	  "Prefix", "Router ID", "Metric", "Seqno", "Routes", "Sources", "Switches", "Reason");
+ 
+   babel_show_entries_(p, &p->ip4_rtable);
+   babel_show_entries_(p, &p->ip6_rtable);
+@@ -2408,6 +2634,7 @@ babel_show_entries(struct proto *P)
+ static void
+ babel_show_routes_(struct babel_proto *p, struct fib *rtable)
+ {
++  struct babel_config *cf = (void *) p->p.cf;
+   int width = babel_sadr_enabled(p) ? -54 : -24;
+ 
+   FIB_WALK(rtable, struct babel_entry, e)
+@@ -2415,11 +2642,28 @@ babel_show_routes_(struct babel_proto *p, struct fib *rtable)
+     struct babel_route *r;
+     WALK_LIST(r, e->routes)
+     {
+-      char c = (r == e->selected) ? '*' : (r->feasible ? '+' : ' ');
++      int feasible = (r->metric < BABEL_INFINITY) &&
++        ((r == e->selected) ? r->feasible : babel_route_feasible(e, r));
++      char c = (r == e->selected) ? '*' : (feasible ? '+' : ' ');
+       btime time = r->expires ? r->expires - current_time() : 0;
+-      cli_msg(-1025, "%-*N %-25I %-10s %5u %c %5u %7t", width,
++      char smooth[16] = "-";
++      if (cf->hysteresis && feasible && r->smoothed_valid)
++      {
++        struct babel_route copy = *r;
++        babel_smooth_route(&copy, cf->hysteresis_time, current_time());
++        u32 value = copy.smoothed_metric;
++        uint whole = value >> BABEL_SMOOTH_SHIFT;
++        uint fraction = ((value & 0xffff) * 1000 + 0x8000) >> BABEL_SMOOTH_SHIFT;
++        if (fraction == 1000)
++        {
++          whole++;
++          fraction = 0;
++        }
++        bsnprintf(smooth, sizeof(smooth), "%u.%03u", whole, fraction);
++      }
++      cli_msg(-1025, "%-*N %-25I %-10s %5u %c %5u %7t %10s", width,
+ 	      e->n.addr, r->next_hop, r->neigh->ifa->ifname,
+-	      r->metric, c, r->seqno, MAX(time, 0));
++	      r->metric, c, r->seqno, MAX(time, 0), smooth);
+     }
+   }
+   FIB_WALK_END;
+@@ -2438,8 +2682,8 @@ babel_show_routes(struct proto *P)
+   }
+ 
+   cli_msg(-1025, "%s:", p->p.name);
+-  cli_msg(-1025, "%-*s %-25s %-9s %6s F %5s %7s", width,
+-	  "Prefix", "Nexthop", "Interface", "Metric", "Seqno", "Expires");
++  cli_msg(-1025, "%-*s %-25s %-9s %6s F %5s %7s %10s", width,
++	  "Prefix", "Nexthop", "Interface", "Metric", "Seqno", "Expires", "Smoothed");
+ 
+   babel_show_routes_(p, &p->ip4_rtable);
+   babel_show_routes_(p, &p->ip6_rtable);
+@@ -2702,10 +2946,53 @@ babel_shutdown(struct proto *P)
+   return PS_FLUSH;
+ }
+ 
++static void
++babel_reconfigure_hysteresis_(struct babel_proto *p, struct fib *rtable,
++                              struct babel_config *old, struct babel_config *new)
++{
++  struct fib_iterator fit;
++  btime now_ = current_time();
++
++  FIB_ITERATE_INIT(&fit, rtable);
++loop:
++  FIB_ITERATE_START(rtable, &fit, struct babel_entry, e)
++  {
++    struct babel_route *r;
++
++    if (old->hysteresis != new->hysteresis)
++      e->hysteresis_pending = 0;
++
++    WALK_LIST(r, e->routes)
++    {
++      if (old->hysteresis && new->hysteresis && r->smoothed_valid)
++      {
++        babel_smooth_route(r, old->hysteresis_time, now_);
++        r->smoothed_at = now_;
++      }
++      else if (old->hysteresis != new->hysteresis)
++      {
++        r->smoothed_valid = 0;
++        if (new->hysteresis && (r->metric < BABEL_INFINITY) &&
++            ((r == e->selected && r->feasible) || babel_route_feasible(e, r)))
++          babel_smooth_route(r, new->hysteresis_time, now_);
++      }
++    }
++
++    if (old->hysteresis && !new->hysteresis)
++    {
++      FIB_ITERATE_PUT_NEXT(&fit, rtable);
++      babel_select_route(p, e, NULL, NULL);
++      goto loop;
++    }
++  }
++  FIB_ITERATE_END;
++}
++
+ static int
+ babel_reconfigure(struct proto *P, struct proto_config *CF)
+ {
+   struct babel_proto *p = (void *) P;
++  struct babel_config *old = (void *) P->cf;
+   struct babel_config *new = (void *) CF;
+   u8 ip6_type = new->ip6_channel ? new->ip6_channel->net_type : NET_IP6;
+ 
+@@ -2719,6 +3006,12 @@ babel_reconfigure(struct proto *P, struct proto_config *CF)
+     return 0;
+ 
+   p->p.cf = CF;
++  if ((old->hysteresis != new->hysteresis) ||
++      (new->hysteresis && (old->hysteresis_time != new->hysteresis_time)))
++  {
++    babel_reconfigure_hysteresis_(p, &p->ip4_rtable, old, new);
++    babel_reconfigure_hysteresis_(p, &p->ip6_rtable, old, new);
++  }
+   babel_reconfigure_ifaces(p, new);
+ 
+   babel_trigger_update(p);
+diff --git a/proto/babel/babel.h b/proto/babel/babel.h
+index 146179cda..2faec464c 100644
+--- a/proto/babel/babel.h
++++ b/proto/babel/babel.h
+@@ -58,6 +58,8 @@
+ #define BABEL_RTT_MIN			(10 MS_)
+ #define BABEL_RTT_MAX			(120 MS_)
+ #define BABEL_RTT_DECAY			42
++#define BABEL_HYSTERESIS_TIME		(12 S_)
++#define BABEL_SMOOTH_SHIFT		16
+ 
+ /* Max interval that will not overflow when carried as 16-bit centiseconds */
+ #define BABEL_TIME_UNITS		10000	/* On-wire times are counted in centiseconds */
+@@ -133,7 +135,9 @@ struct babel_config {
+   struct proto_config c;
+   list iface_list;			/* List of iface configs (struct babel_iface_config) */
+   uint hold_time;			/* Time to hold stale entries and unreachable routes */
++  btime hysteresis_time;		/* Route metric smoothing time constant */
+   u8 randomize_router_id;
++  u8 hysteresis;
+ 
+   struct channel_config *ip4_channel;
+   struct channel_config *ip6_channel;
+@@ -284,11 +288,14 @@ struct babel_route {
+   struct babel_neighbor *neigh;
+ 
+   u8 feasible;
++  u8 smoothed_valid;
+   u16 seqno;
+   u16 metric;
+   u16 advert_metric;
++  u32 smoothed_metric;			/* Q16.16, never used as a protocol metric */
+   u64 router_id;
+   ip_addr next_hop;
++  btime smoothed_at;
+   btime refresh_time;
+   btime expires;
+ };
+@@ -313,9 +320,12 @@ struct babel_entry {
+ 
+   u8 valid;				/* Entry validity state (BABEL_ENTRY_*) */
+   u8 unreachable;			/* Unreachable route is announced */
++  u8 hysteresis_pending;
++  u8 selection_reason;
+   u16 seqno;				/* Outgoing seqno */
+   u16 metric;				/* Outgoing metric */
+   u64 router_id;			/* Outgoing router ID */
++  u64 switches;				/* Changes between reachable next hops */
+   btime updated;			/* Last change of outgoing rte, for triggered updates */
+ 
+   struct fib_node n;
+@@ -325,6 +335,16 @@ struct babel_entry {
+ #define BABEL_ENTRY_VALID	1	/* Valid outgoing route */
+ #define BABEL_ENTRY_STALE	2	/* Stale outgoing route, waiting for GC */
+ 
++enum babel_selection_reason {
++  BABEL_SELECT_NONE,
++  BABEL_SELECT_INITIAL,
++  BABEL_SELECT_METRIC,
++  BABEL_SELECT_HYSTERESIS,
++  BABEL_SELECT_FAILURE,
++  BABEL_SELECT_NEXTHOP,
++  BABEL_SELECT_UNREACHABLE,
++};
++
+ 
+ /*
+  *	Internal TLV messages
+diff --git a/proto/babel/config.Y b/proto/babel/config.Y
+index 5aa8b602c..051ad2a74 100644
+--- a/proto/babel/config.Y
++++ b/proto/babel/config.Y
+@@ -27,7 +27,7 @@ CF_KEYWORDS(BABEL, INTERFACE, METRIC, RXCOST, HELLO, UPDATE, INTERVAL, PORT,
+ 	NEXT, HOP, IPV4, IPV6, SHOW, INTERFACES, NEIGHBORS,
+ 	ENTRIES, RANDOMIZE, ROUTER, ID, AUTHENTICATION, NONE, MAC, PERMISSIVE,
+ 	EXTENDED, TUNNEL, RTT, MIN, MAX, DECAY, SEND, TIMESTAMPS, COST, DELAY,
+-	PREFER, NATIVE)
++	PREFER, NATIVE, HYSTERESIS, TIME)
+ 
+ CF_GRAMMAR
+ 
+@@ -38,6 +38,7 @@ babel_proto_start: proto_start BABEL
+   this_proto = proto_config_new(&proto_babel, $1);
+   init_list(&BABEL_CFG->iface_list);
+   BABEL_CFG->hold_time = 1 S_;
++  BABEL_CFG->hysteresis_time = BABEL_HYSTERESIS_TIME;
+ };
+ 
+ babel_proto_item:
+@@ -45,6 +46,8 @@ babel_proto_item:
+  | proto_channel
+  | INTERFACE babel_iface
+  | RANDOMIZE ROUTER ID bool { BABEL_CFG->randomize_router_id = $4; }
++ | HYSTERESIS bool { BABEL_CFG->hysteresis = $2; }
++ | HYSTERESIS TIME expr_us { BABEL_CFG->hysteresis_time = $3; if ($3 <= 0) cf_error("Hysteresis time must be positive"); }
+  ;
+ 
+ babel_proto_opts:

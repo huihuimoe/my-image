@@ -1,11 +1,9 @@
 # BIRD 3
 
-`ghcr.io/huihuimoe/my-image/bird` contains the official Wolfi `bird` APK and its
-runtime dependencies. The Wolfi package enables libssh and includes `birdc` and
-`birdcl`. [apko](https://github.com/chainguard-dev/apko) assembles the image;
-this repository does not compile BIRD from source. No shell or iproute2 is added.
+`ghcr.io/huihuimoe/my-image/bird:3` runs BIRD 3 on Wolfi with the local
+[patches](patches/README.md). It includes `birdc`, `birdcl`, and libssh support.
 
-Supported platforms: `linux/amd64`, `linux/arm64`.
+Platforms: `linux/amd64` (x86-64-v2 or later) and `linux/arm64`.
 
 ## Run
 
@@ -15,77 +13,42 @@ Mount your configuration at `/etc/bird/bird.conf`:
 docker run -d --name bird \
   --network host \
   --cap-add NET_ADMIN \
+  --cap-add NET_RAW \
   --mount "type=bind,src=$PWD/bird.conf,dst=/etc/bird/bird.conf,readonly" \
   ghcr.io/huihuimoe/my-image/bird:3
 
-docker exec bird /usr/bin/birdc show status
-docker exec bird /usr/bin/birdc show protocols
-docker exec bird /usr/bin/birdc configure
+docker exec bird birdc show status
 ```
 
-The image runs as root. Host networking lets BIRD use the host's interfaces and
-listen on TCP port 179. Add `NET_ADMIN` when BIRD must modify kernel routes.
-With host networking, those route changes affect the host. Protocols that use raw
-sockets may also need `NET_RAW` if your runtime does not grant it by default.
+The container runs as root. With host networking, BIRD can change the host's
+routes. Set `log stderr all;` in the configuration to see logs with `docker logs`.
+See [example/bird.conf](example/bird.conf) for a minimal configuration.
 
-The default command is `/usr/bin/bird -f -R -c /etc/bird/bird.conf`. `-R` enables
-graceful restart recovery. Arguments supplied after the image name replace these
-default arguments. Use `--entrypoint /usr/bin/birdc` to override the executable.
-The control socket is `/run/bird.ctl`.
-
-The image preserves Wolfi's example at `/etc/bird.conf` and links
-`/etc/bird/bird.conf` to it. You can also mount a whole configuration directory at
-`/etc/bird`. Configure `log stderr all;` for container logs: the packaged sample
-uses syslog, and the image does not run a syslog daemon.
-
-[example/bird.conf](example/bird.conf) provides a minimal configuration with
-stderr logging. It keeps a static route inside BIRD without exporting kernel
-routes. Replace its router ID and protocols for your deployment.
+The default command is `bird -f -R -c /etc/bird/bird.conf`. The control socket
+is `/run/bird.ctl`.
 
 ## Releases
 
-The [BIRD workflow](../.github/workflows/bird.yaml) runs daily at 04:23 UTC and
-can also be started manually. It does not run on pull requests or pushes.
+The [workflow](../.github/workflows/bird.yaml) checks for updates every three
+days. It applies the local patches and fails if they do not apply.
 
-1. Read the official Wolfi indexes for `x86_64` and `aarch64`.
-2. Select the newest stable BIRD `3.x.y-rN` package available on both architectures.
-3. Check the package's tags through the GitHub Packages API.
-4. If the full package version tag is absent, lock dependencies and publish both
-   architectures with apko. Package signatures remain verified by apko.
-
-For example, `3.4.0-r2` publishes tags `3.4.0-r2`, `3.4.0`, `3`, and `latest`.
-The full tag tracks the APK revision; the other tags move to the latest release.
-A new BIRD version or Wolfi revision triggers a release. Changes limited to other
-dependencies do not trigger one. Use the manual workflow's `force` input to
-rebuild the current package with updated dependencies.
-
-The workflow uses `GITHUB_TOKEN` with `packages: write`; no additional secret is
-required. The package must allow this repository's Actions to access it. After
-the first release, set package visibility in GHCR if anonymous pulls are needed.
-Dependency locks, resolved image configuration, SBOMs, and published digest
-references are saved as workflow artifacts.
-
-## Local assembly
-
-From the repository root, with Docker and Python 3 installed:
+To rebuild and republish the latest selected version:
 
 ```sh
-# Resolves the latest common BIRD 3 package and writes bird.resolved.yaml.
-python3 bird/check-version.py
-mkdir -p bird-output/sboms
-docker run --rm \
-  --mount "type=bind,src=$PWD,dst=/work" \
-  cgr.dev/chainguard/apko@sha256:d6c63be291b6c6a8fe37cb9b5d656e84db4f209983e38f1f18d2c233b9f60e04 \
-  build bird.resolved.yaml bird:local bird-output/bird.tar \
-  --sbom-path /work/bird-output/sboms
-docker load -i bird-output/bird.tar
-docker run --rm bird:local-amd64 --version
+gh workflow run bird.yaml --ref master -f force=true
 ```
 
-The archive contains `bird:local-amd64` and `bird:local-arm64`. Run the tag that
-matches your host, or configure emulation. To assemble the checked-in baseline
-instead of detecting a release, use `bird/apko.yaml` as the input configuration.
+The workflow updates the version tag, `3`, and `latest`. `force` does not select
+a specific BIRD version.
 
-Sources: [Wolfi package recipe](https://github.com/wolfi-dev/os/blob/main/bird.yaml),
-[BIRD releases](https://bird.nic.cz/get-bird/),
-[reference image](https://github.com/akafeng/docker-bird).
+## Local build
+
+From the repository root:
+
+```sh
+BIRD_VERSION=$(python3 bird/check-version.py | sed -n 's/^upstream=//p')
+docker buildx build --platform linux/amd64 --load \
+  --build-arg "BIRD_VERSION=$BIRD_VERSION" -t bird:local bird
+```
+
+Use `--platform linux/arm64` to cross-compile the arm64 image.

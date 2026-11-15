@@ -2,11 +2,11 @@ name: BIRD
 
 on:
   schedule:
-    - cron: '23 4 * * *'
+    - cron: '23 4 */3 * *'
   workflow_dispatch:
     inputs:
       force:
-        description: Rebuild even if the latest BIRD package was already published
+        description: Force rebuild and overwrite image tags
         type: boolean
         default: false
 
@@ -16,10 +16,6 @@ permissions:
 concurrency:
   group: bird-release
   cancel-in-progress: false
-
-env:
-  # renovate: datasource=docker depName=cgr.dev/chainguard/apko
-  APKO_IMAGE: cgr.dev/chainguard/apko@sha256:d6c63be291b6c6a8fe37cb9b5d656e84db4f209983e38f1f18d2c233b9f60e04
 
 jobs:
   release:
@@ -32,7 +28,7 @@ jobs:
       - uses: actions/checkout@v7
       - name: Resolve image name
         run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}/bird" >> "$GITHUB_ENV"
-      - name: Detect new BIRD 3 package
+      - name: Detect new BIRD 3 package or build changes
         id: version
         env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -41,13 +37,9 @@ jobs:
           args=(--image "$IMAGE")
           if [[ "$FORCE" == true ]]; then args+=(--force); fi
           python3 bird/check-version.py "${args[@]}"
-      - name: Lock dependencies for both architectures
+      - name: Set up Docker Buildx
         if: steps.version.outputs.build == 'true'
-        run: |
-          mkdir -p bird-output/sboms bird-output/cache
-          apko=(docker run --rm --mount "type=bind,src=$PWD,dst=/work" "$APKO_IMAGE")
-          "${apko[@]}" lock bird.resolved.yaml --output bird-output/apko.lock.json \
-            --cache-dir /work/bird-output/cache
+        uses: docker/setup-buildx-action@v4
       - name: Log in to GHCR
         if: steps.version.outputs.build == 'true'
         uses: docker/login-action@v4
@@ -55,37 +47,30 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Publish multi-architecture image
+      - name: Build and publish multi-architecture image
         if: steps.version.outputs.build == 'true'
-        env:
-          PACKAGE_VERSION: ${{ steps.version.outputs.version }}
-          BIRD_VERSION: ${{ steps.version.outputs.upstream }}
-        run: |
-          docker run --rm \
-            --mount "type=bind,src=$PWD,dst=/work" \
-            --mount "type=bind,src=$HOME/.docker,dst=/docker-config,readonly" \
-            -e DOCKER_CONFIG=/docker-config \
-            "$APKO_IMAGE" publish bird.resolved.yaml \
-            "$IMAGE:$BIRD_VERSION" "$IMAGE:3" "$IMAGE:latest" "$IMAGE:$PACKAGE_VERSION" \
-            --lockfile bird-output/apko.lock.json --cache-dir /work/bird-output/cache \
-            --sbom-path /work/bird-output/sboms --image-refs bird-output/image-refs.txt
-      - name: Save release metadata
-        if: always() && steps.version.outputs.build == 'true'
-        uses: actions/upload-artifact@v7
+        uses: docker/build-push-action@v7
         with:
-          name: bird-${{ steps.version.outputs.version }}
-          path: |
-            bird.resolved.yaml
-            bird-output/apko.lock.json
-            bird-output/sboms/
-            bird-output/image-refs.txt
+          context: ./bird
+          platforms: linux/amd64,linux/arm64
+          build-args: |
+            BIRD_VERSION=${{ steps.version.outputs.upstream }}
+          push: true
+          provenance: mode=max
+          sbom: true
+          tags: |
+            ${{ env.IMAGE }}:${{ steps.version.outputs.tag }}
+            ${{ env.IMAGE }}:${{ steps.version.outputs.version }}
+            ${{ env.IMAGE }}:${{ steps.version.outputs.upstream }}
+            ${{ env.IMAGE }}:3
+            ${{ env.IMAGE }}:latest
       - name: Report result
         env:
-          PACKAGE_VERSION: ${{ steps.version.outputs.version }}
+          BUILD_TAG: ${{ steps.version.outputs.tag }}
           BUILD: ${{ steps.version.outputs.build }}
         run: |
           if [[ "$BUILD" == true ]]; then
-            echo "Published $IMAGE:$PACKAGE_VERSION (amd64 + arm64)." >> "$GITHUB_STEP_SUMMARY"
+            echo "Published $IMAGE:$BUILD_TAG (amd64 + arm64)." >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "$IMAGE:$PACKAGE_VERSION already exists; skipped." >> "$GITHUB_STEP_SUMMARY"
+            echo "$IMAGE:$BUILD_TAG already exists; skipped." >> "$GITHUB_STEP_SUMMARY"
           fi

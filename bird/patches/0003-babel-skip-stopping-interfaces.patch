@@ -1,0 +1,41 @@
+Subject: babel: Exclude routes on interfaces being removed
+
+Mark the interface down before withdrawing neighbors so selection cannot temporarily use another route on that interface.
+
+diff --git a/proto/babel/babel.c b/proto/babel/babel.c
+index 0a0f6e93f..df04dd01b 100644
+--- a/proto/babel/babel.c
++++ b/proto/babel/babel.c
+@@ -590,7 +590,7 @@ babel_is_feasible(struct babel_source *s, u16 seqno, u16 metric)
+ static inline int
+ babel_route_feasible(struct babel_entry *e, struct babel_route *r)
+ {
+-  return r->feasible &&
++  return r->neigh->ifa->up && r->feasible &&
+     babel_is_feasible(babel_find_source(e, r->router_id), r->seqno, r->advert_metric);
+ }
+ 
+@@ -1842,6 +1842,7 @@ babel_iface_stop(struct babel_iface *ifa)
+   node *n;
+ 
+   TRACE(D_EVENTS, "Stopping interface %s", ifa->ifname);
++  ifa->up = 0;
+ 
+   /*
+    * Rather than just flushing the neighbours, we set the metric of their routes
+@@ -1858,7 +1859,6 @@ babel_iface_stop(struct babel_iface *ifa)
+   }
+ 
+   tm_stop(ifa->timer);
+-  ifa->up = 0;
+ }
+ 
+ static inline int
+@@ -1998,6 +1998,7 @@ static void
+ babel_remove_iface(struct babel_proto *p, struct babel_iface *ifa)
+ {
+   TRACE(D_EVENTS, "Removing interface %s", ifa->iface->name);
++  ifa->up = 0;
+ 
+   struct babel_neighbor *n;
+   WALK_LIST_FIRST(n, ifa->neigh_list)

@@ -1,0 +1,60 @@
+From bfc843de287bfeec471cf3b6614e2c792e343b7c Mon Sep 17 00:00:00 2001
+From: Ben Sparks <bird-users_mana-toast@mail.wattsmo.com>
+Date: Fri, 30 Oct 2026 21:10:23 +0000
+Subject: [PATCH] Nest: Pad pending export to journal item size before pushing
+
+lfjour_init() rounds the journal item size up with BIRD_CPU_ALIGN(), and
+rt_exporter_push() copies the whole aligned item, minus its header, out
+of the item it is given. rte_announce_to() passes a struct
+rt_pending_export from its stack, which is smaller than the aligned item
+whenever its size is not a multiple of the alignment. On x86_64 the struct
+is 40 bytes and the journal item 48, so every route announcement copied
+8 bytes from beyond the struct into the journal.
+
+Builds that check object sizes in memcpy() catch this. With Alpine's
+default toolchain (GCC 15, musl, fortify-headers, _FORTIFY_SOURCE=2) and
+LTO, the check sees the stack object and BIRD dies with SIGILL on the
+first route. AddressSanitizer reports a stack-buffer-overflow read. Other
+builds copy stray stack bytes into the padding of the journal item.
+
+Give the copy a zeroed source as large as the journal item.
+
+Target: patch
+---
+ nest/rt-table.c | 18 ++++++++++--------
+ 1 file changed, 10 insertions(+), 8 deletions(-)
+
+diff --git a/nest/rt-table.c b/nest/rt-table.c
+index 6b40c41..12cfd44 100644
+--- a/nest/rt-table.c
++++ b/nest/rt-table.c
+@@ -2044,14 +2044,16 @@ rte_announce_to(struct rt_exporter *e, struct rt_net_pending_export *npe, const
+   if (new == old)
+     return NULL;
+ 
+-  struct rt_pending_export rpe = {
+-    .it = {
+-      .new = new,
+-      .old = old,
+-    },
+-  };
+-
+-  struct rt_export_item *rei = rt_exporter_push(e, &rpe.it);
++  /* rt_exporter_push() copies the whole aligned journal item */
++  union {
++    struct rt_pending_export rpe;
++    byte slot[BIRD_CPU_ALIGN(sizeof(struct rt_pending_export))];
++  } src;
++  memset(&src, 0, sizeof(src));
++  src.rpe.it.new = new;
++  src.rpe.it.old = old;
++
++  struct rt_export_item *rei = rt_exporter_push(e, &src.rpe.it);
+   if (!rei)
+     return NULL;
+ 
+
+base-commit: 3e4e50a54cc98d8b1df77eb17a11d7e7d92642c9
+-- 
+2.47.3
+
