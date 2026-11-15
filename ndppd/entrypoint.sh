@@ -28,4 +28,4 @@ else
   echo "Using configuration file: $config_file"
 fi
 
-exec /usr/local/sbin/ndppd -c "$config_file" -v
+exec /usr/local/sbin/ndppd -c "$config_file"

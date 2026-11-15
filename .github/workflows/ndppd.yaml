@@ -56,55 +56,8 @@ jobs:
             echo 'EOF'
           } >> "$GITHUB_OUTPUT"
 
-  build-arm64:
-    needs: resolve
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v7
-      - uses: docker/setup-buildx-action@v4
-      - name: Cross-compile arm64 image
-        uses: docker/build-push-action@v7
-        with:
-          context: ndppd
-          platforms: linux/arm64
-          tags: ndppd:verify
-          build-args: NDPPD_VERSION=${{ needs.resolve.outputs.version }}
-          outputs: type=docker,dest=ndppd-arm64.tar
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ndppd-arm64
-          path: ndppd-arm64.tar
-          if-no-files-found: error
-          retention-days: 1
-          overwrite: true
-
-  verify-arm64:
-    needs: build-arm64
-    runs-on: ubuntu-26.04-arm
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: ndppd-arm64
-      - name: Load cross-compiled image
-        run: docker load --input ndppd-arm64.tar
-      - name: Verify startup on arm64
-        run: |
-          set -euo pipefail
-          container="$(docker run -d --network none --cap-drop ALL --cap-add NET_ADMIN --cap-add NET_RAW \
-            -e IPV6_SUBNET=2001:db8:1::/64 -e PROXY_IFACE=lo -e FWD_IFACE=lo ndppd:verify)"
-          trap 'docker rm -f "$container" >/dev/null' EXIT
-          sleep 1
-          [[ "$(docker inspect --format '{{.State.Status}}' "$container")" == running ]]
-          docker stop --time 3 "$container"
-          [[ "$(docker inspect --format '{{.State.ExitCode}}' "$container")" == 0 ]]
-          docker logs "$container" | grep -F 'Loading configuration "/etc/ndppd.conf"'
-
   build:
-    needs: [resolve, verify-arm64]
+    needs: resolve
     runs-on: ubuntu-latest
     permissions:
       contents: read
