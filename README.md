@@ -50,6 +50,31 @@ podman run \
   1. Reduce the size of the image to protect your hard drive.
   2. Add [juicefs-lite](https://github.com/juicedata/juicefs/blob/main/Makefile#L30) version, which only contains local-db(like sqlite,badgerdb) metadata engine.
 
+## [ndppd](https://github.com/DanielAdolfsson/ndppd)
+
+Wolfi-based image for the ndppd 1.x IPv6 Neighbor Discovery proxy, for
+`linux/amd64` and `linux/arm64`.
+Run with host networking and existing Ethernet interfaces:
+
+```sh
+docker run -d --restart=unless-stopped --network host \
+  --cap-drop ALL --cap-add NET_ADMIN --cap-add NET_RAW \
+  -e IPV6_SUBNET=2001:db8:1::/64 \
+  ghcr.io/huihuimoe/my-image/ndppd:latest
+```
+
+`PROXY_IFACE` and `FWD_IFACE` default to `eth0` and `docker0`. Alternatively,
+set `CONFIG` to the configuration contents or `CONFIG_FILE` to the path of a
+mounted file. The precedence is `CONFIG_FILE`, `IPV6_SUBNET`, `CONFIG`, then
+`/etc/ndppd.conf`. ndppd 1.x requires its own configuration format; 0.2.x
+configuration files must be updated. See the [upstream configuration guide](https://github.com/DanielAdolfsson/ndppd#configuration).
+ndppd does not enable IPv6 forwarding or route packets; configure the host separately.
+
+Run the **Build ndppd** workflow with an upstream version, with or without a `v`
+prefix, or leave it empty for the most recently published release, including
+pre-releases. The image receives the upstream tag; only an unspecified version
+also updates `latest`.
+
 ## nginx
 
 experimental image of [different ssl library support on nginx](https://github.com/huihuimoe/my-scripts).
