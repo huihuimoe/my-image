@@ -283,3 +283,11 @@ The container logs every route command and the nft table it applies.
 
 The kernel must provide WireGuard. This image does not include `kmod` or compile
 kernel modules; load `wireguard` on the host before starting the container.
+
+## [ZeroTier One](https://github.com/zerotier/ZeroTierOne)
+
+- Package: `ghcr.io/huihuimoe/my-image/zerotier`
+- Platforms: `linux/amd64`, `linux/arm64`
+- Wolfi-based image with ZeroTier One built from source and direct-only data plane patches (`directDataOnly`).
+- [Configuration, usage, and patch details](zerotier/README.md).
+

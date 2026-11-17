@@ -1,0 +1,327 @@
+From 5ba658d2d027baa8fb7f988bea4ab6c4f0dee8fc Mon Sep 17 00:00:00 2001
+Date: Tue, 17 Nov 2026 16:05:03 +0900
+Subject: [PATCH 2/2] Configure direct-only data plane on Linux
+
+---
+ service/OneService.cpp | 134 +++++++++++++++++++++++++++++++++++------
+ service/README.md      |   1 +
+ 2 files changed, 115 insertions(+), 20 deletions(-)
+
+diff --git a/service/OneService.cpp b/service/OneService.cpp
+index d5d086058..4d9603c90 100644
+--- a/service/OneService.cpp
++++ b/service/OneService.cpp
+@@ -7,8 +7,10 @@
+  */
+ 
+ #include <algorithm>
++#include <atomic>
+ #include <exception>
+ #include <map>
++#include <mutex>
+ #include <stdint.h>
+ #include <stdio.h>
+ #include <stdlib.h>
+@@ -854,8 +856,8 @@ class OneServiceImpl : public OneService {
+ 	bool _cpuPinningEnabled;
+ 	unsigned int _concurrency;
+ 
+-	bool _allowTcpFallbackRelay;
+-	bool _forceTcpRelay;
++	std::atomic<bool> _allowTcpFallbackRelay;
++	std::atomic<bool> _forceTcpRelay;
+ 	bool _allowSecondaryPort;
+ 	bool _enableWebServer;
+ 
+@@ -911,8 +913,15 @@ class OneServiceImpl : public OneService {
+ 	// Active TCP/IP connections
+ 	std::vector<TcpConnection*> _tcpConnections;
+ 	Mutex _tcpConnections_m;
++	std::recursive_mutex _tcpFallback_m; // Phy connect and close can invoke callbacks synchronously.
+ 	TcpConnection* _tcpFallbackTunnel;
+ 
++	bool tcpFallbackActive()
++	{
++		std::lock_guard<std::recursive_mutex> lock(_tcpFallback_m);
++		return _tcpFallbackTunnel != nullptr;
++	}
++
+ 	// Termination status information
+ 	ReasonForTermination _termReason;
+ 	std::string _fatalErrorMessage;
+@@ -1305,6 +1314,10 @@ class OneServiceImpl : public OneService {
+ 			int64_t lastBindRefresh = 0;
+ 			int64_t lastCleanedPeersDb = 0;
+ 			int64_t lastLocalConfFileCheck = OSUtils::now();
++#ifdef __LINUX__
++			struct stat lastLocalConfStat = {};
++			bool lastLocalConfStatValid = false;
++#endif
+ 			int64_t lastOnline = lastLocalConfFileCheck;
+ 
+ 			for (;;) {
+@@ -1329,17 +1342,36 @@ class OneServiceImpl : public OneService {
+ 					restarted = true;
+ 				}
+ 
+-				// Reload local.conf if anything changed recently
++				// Check local.conf for updates.
+ 				if ((now - lastLocalConfFileCheck) >= ZT_LOCAL_CONF_FILE_CHECK_INTERVAL) {
+ 					lastLocalConfFileCheck = now;
+ 					struct stat result;
+ 					if (stat((_homePath + ZT_PATH_SEPARATOR_S "local.conf").c_str(), &result) == 0) {
++#ifdef __LINUX__
++						const bool changed = ! lastLocalConfStatValid || result.st_ino != lastLocalConfStat.st_ino ||
++							result.st_size != lastLocalConfStat.st_size || result.st_mtim.tv_sec != lastLocalConfStat.st_mtim.tv_sec ||
++							result.st_mtim.tv_nsec != lastLocalConfStat.st_mtim.tv_nsec || result.st_ctim.tv_sec != lastLocalConfStat.st_ctim.tv_sec ||
++							result.st_ctim.tv_nsec != lastLocalConfStat.st_ctim.tv_nsec;
++						lastLocalConfStat = result;
++						lastLocalConfStatValid = true;
++#else
+ 						int64_t mod_time = result.st_mtime * 1000;
+-						if ((now - mod_time) <= ZT_LOCAL_CONF_FILE_CHECK_INTERVAL) {
++						const bool changed = (now - mod_time) <= ZT_LOCAL_CONF_FILE_CHECK_INTERVAL;
++#endif
++						if (changed) {
+ 							readLocalSettings();
++							const bool wasForcingTcp = _forceTcpRelay;
+ 							applyLocalConfig();
++							if (wasForcingTcp && ! _forceTcpRelay) {
++								lastBindRefresh = 0;
++							}
+ 						}
+ 					}
++#ifdef __LINUX__
++					else {
++						lastLocalConfStatValid = false;
++					}
++#endif
+ 				}
+ 
+ 				// Refresh bindings in case device's interfaces have changed, and also sync routes to update any shadow routes (e.g. shadow default)
+@@ -1405,8 +1437,11 @@ class OneServiceImpl : public OneService {
+ 				}
+ 
+ 				// Close TCP fallback tunnel if we have direct UDP
+-				if (! _forceTcpRelay && (_tcpFallbackTunnel) && ((now - _lastDirectReceiveFromGlobal) < (ZT_TCP_FALLBACK_AFTER / 2))) {
+-					_phy.close(_tcpFallbackTunnel->sock);
++				{
++					std::lock_guard<std::recursive_mutex> fallbackLock(_tcpFallback_m);
++					if (! _forceTcpRelay && (_tcpFallbackTunnel) && ((now - _lastDirectReceiveFromGlobal) < (ZT_TCP_FALLBACK_AFTER / 2))) {
++						_phy.close(_tcpFallbackTunnel->sock);
++					}
+ 				}
+ 
+ 				// Sync multicast group memberships
+@@ -1500,9 +1535,18 @@ class OneServiceImpl : public OneService {
+ 		}
+ 
+ 		try {
+-			Mutex::Lock _l(_tcpConnections_m);
+-			while (! _tcpConnections.empty())
+-				_phy.close((*_tcpConnections.begin())->sock);
++			for (;;) {
++				std::lock_guard<std::recursive_mutex> fallbackLock(_tcpFallback_m);
++				PhySocket* sock;
++				{
++					Mutex::Lock _l(_tcpConnections_m);
++					if (_tcpConnections.empty()) {
++						break;
++					}
++					sock = _tcpConnections.front()->sock;
++				}
++				_phy.close(sock);
++			}
+ 		}
+ 		catch (...) {
+ 		}
+@@ -1987,7 +2031,7 @@ class OneServiceImpl : public OneService {
+ 					if (pl->peers[i].address == wantp) {
+ 						SharedPtr<Bond> bond = _node->bondController()->getBondByPeerId(wantp);
+ 						if (bond) {
+-							_peerToJson(out, &(pl->peers[i]), bond, (_tcpFallbackTunnel != (TcpConnection*)0));
++							_peerToJson(out, &(pl->peers[i]), bond, tcpFallbackActive());
+ 							setContent(req, res, out.dump());
+ 							foundBond = true;
+ 						}
+@@ -2388,7 +2432,7 @@ class OneServiceImpl : public OneService {
+ 					const uint64_t id = pl->peers[i].address;
+ 					bond = _node->bondController()->getBondByPeerId(id);
+ 				}
+-				_peerToJson(pj, &(pl->peers[i]), bond, (_tcpFallbackTunnel != (TcpConnection*)0));
++				_peerToJson(pj, &(pl->peers[i]), bond, tcpFallbackActive());
+ 				out.push_back(pj);
+ 			}
+ 			_node->freeQueryResult((void*)pl);
+@@ -2414,7 +2458,7 @@ class OneServiceImpl : public OneService {
+ 					if (pl->peers[i].isBonded) {
+ 						bond = _node->bondController()->getBondByPeerId(wantp);
+ 					}
+-					_peerToJson(out, &(pl->peers[i]), bond, (_tcpFallbackTunnel != (TcpConnection*)0));
++					_peerToJson(out, &(pl->peers[i]), bond, tcpFallbackActive());
+ 					break;
+ 				}
+ 			}
+@@ -2440,7 +2484,7 @@ class OneServiceImpl : public OneService {
+ 			out["address"] = tmp;
+ 			out["publicIdentity"] = status.publicIdentity;
+ 			out["online"] = (bool)(status.online != 0);
+-			out["tcpFallbackActive"] = (_tcpFallbackTunnel != (TcpConnection*)0);
++			out["tcpFallbackActive"] = tcpFallbackActive();
+ 			out["versionMajor"] = ZEROTIER_ONE_VERSION_MAJOR;
+ 			out["versionMinor"] = ZEROTIER_ONE_VERSION_MINOR;
+ 			out["versionRev"] = ZEROTIER_ONE_VERSION_REVISION;
+@@ -2877,19 +2921,44 @@ class OneServiceImpl : public OneService {
+ 			}
+ 		}
+ 
++		const bool directDataOnly = OSUtils::jsonBool(settings["directDataOnly"], false);
++		const bool wasDirectDataOnly = _node->directDataOnly();
++		_node->setDirectDataOnly(directDataOnly);
++		std::unique_lock<std::recursive_mutex> fallbackLock(_tcpFallback_m);
++
+ 		// bondingPolicy cannot be used with allowTcpFallbackRelay
+ 		bool _forceTcpRelayTmp = (OSUtils::jsonBool(settings["forceTcpRelay"], false));
+ 		bool _bondInUse = _node->bondController()->inUse();
+ 		if (_forceTcpRelayTmp && _bondInUse) {
+ 			fprintf(stderr, "Warning: forceTcpRelay cannot be used with multipath. Disabling forceTcpRelay\n");
+ 		}
+-		_allowTcpFallbackRelay = (OSUtils::jsonBool(settings["allowTcpFallbackRelay"], true) && ! _node->bondController()->inUse());
+-		_forceTcpRelay = (_forceTcpRelayTmp && ! _node->bondController()->inUse());
+-		_enableWebServer = (OSUtils::jsonBool(settings["enableWebServer"], false));
+-
++		if (directDataOnly && _forceTcpRelayTmp) {
++			fprintf(stderr, "Warning: directDataOnly overrides forceTcpRelay; using UDP.\n");
++		}
++		if (directDataOnly && settings["allowTcpFallbackRelay"].is_boolean() && settings["allowTcpFallbackRelay"].get<bool>()) {
++			fprintf(stderr, "Warning: directDataOnly overrides allowTcpFallbackRelay.\n");
++		}
++		_allowTcpFallbackRelay = (OSUtils::jsonBool(settings["allowTcpFallbackRelay"], true) && ! _node->bondController()->inUse() && ! directDataOnly);
++		_forceTcpRelay = (_forceTcpRelayTmp && ! _node->bondController()->inUse() && ! directDataOnly);
+ #ifdef ZT_TCP_FALLBACK_RELAY
+ 		_fallbackRelayAddress = InetAddress(OSUtils::jsonString(settings["tcpFallbackRelay"], ZT_TCP_FALLBACK_RELAY).c_str());
+ #endif
++		if (directDataOnly && ! wasDirectDataOnly) {
++			std::vector<PhySocket*> tunnels;
++			{
++				Mutex::Lock _l(_tcpConnections_m);
++				for (TcpConnection* tc : _tcpConnections) {
++					if (tc->type == TcpConnection::TCP_TUNNEL_OUTGOING && tc->sock) {
++						tunnels.push_back(tc->sock);
++					}
++				}
++			}
++			for (PhySocket* sock : tunnels) {
++				_phy.close(sock);
++			}
++		}
++		fallbackLock.unlock();
++		_enableWebServer = (OSUtils::jsonBool(settings["enableWebServer"], false));
+ 		_primaryPort = (unsigned int)OSUtils::jsonInt(settings["primaryPort"], (uint64_t)_primaryPort) & 0xffff;
+ 		_allowSecondaryPort = OSUtils::jsonBool(settings["allowSecondaryPort"], true);
+ 		_secondaryPort = (unsigned int)OSUtils::jsonInt(settings["secondaryPort"], 0);
+@@ -3250,6 +3319,7 @@ class OneServiceImpl : public OneService {
+ 
+ 	inline void phyOnTcpConnect(PhySocket* sock, void** uptr, bool success)
+ 	{
++		std::lock_guard<std::recursive_mutex> fallbackLock(_tcpFallback_m);
+ 		if (! success) {
+ 			phyOnTcpClose(sock, uptr);
+ 			return;
+@@ -3263,6 +3333,10 @@ class OneServiceImpl : public OneService {
+ 		tc->sock = sock;
+ 
+ 		if (tc->type == TcpConnection::TCP_TUNNEL_OUTGOING) {
++			if (_node->directDataOnly()) {
++				_phy.close(sock, true);
++				return;
++			}
+ 			if (_tcpFallbackTunnel)
+ 				_phy.close(_tcpFallbackTunnel->sock);
+ 			_tcpFallbackTunnel = tc;
+@@ -3308,6 +3382,7 @@ class OneServiceImpl : public OneService {
+ 
+ 	void phyOnTcpClose(PhySocket* sock, void** uptr)
+ 	{
++		std::lock_guard<std::recursive_mutex> fallbackLock(_tcpFallback_m);
+ 		TcpConnection* tc = (TcpConnection*)*uptr;
+ 		if (tc) {
+ 			if (tc == _tcpFallbackTunnel) {
+@@ -3328,6 +3403,10 @@ class OneServiceImpl : public OneService {
+ 				return;	  // sanity check, should never happen
+ 			Metrics::tcp_recv += len;
+ 			TcpConnection* tc = reinterpret_cast<TcpConnection*>(*uptr);
++			if (tc->type == TcpConnection::TCP_TUNNEL_OUTGOING && _node->directDataOnly()) {
++				_phy.close(sock);
++				return;
++			}
+ 			tc->lastReceive = OSUtils::now();
+ 			switch (tc->type) {
+ 				case TcpConnection::TCP_UNCATEGORIZED_INCOMING:
+@@ -3421,7 +3500,12 @@ class OneServiceImpl : public OneService {
+ 
+ 	inline void phyOnTcpWritable(PhySocket* sock, void** uptr)
+ 	{
++		std::lock_guard<std::recursive_mutex> fallbackLock(_tcpFallback_m);
+ 		TcpConnection* tc = reinterpret_cast<TcpConnection*>(*uptr);
++		if (tc->type == TcpConnection::TCP_TUNNEL_OUTGOING && _node->directDataOnly()) {
++			_phy.close(sock);
++			return;
++		}
+ 		bool closeit = false;
+ 		{
+ 			Mutex::Lock _l(tc->writeq_m);
+@@ -3981,7 +4065,8 @@ class OneServiceImpl : public OneService {
+ 	inline int nodeWirePacketSendFunction(const int64_t localSocket, const struct sockaddr_storage* addr, const void* data, unsigned int len, unsigned int ttl)
+ 	{
+ #ifdef ZT_TCP_FALLBACK_RELAY
+-		if (_allowTcpFallbackRelay) {
++		std::unique_lock<std::recursive_mutex> fallbackLock(_tcpFallback_m);
++		if (_allowTcpFallbackRelay && ! _node->directDataOnly()) {
+ 			if (addr->ss_family == AF_INET) {
+ 				// TCP fallback tunnel support, currently IPv4 only
+ 				if ((len >= 16) && (reinterpret_cast<const InetAddress*>(addr)->ipScope() == InetAddress::IP_SCOPE_GLOBAL)) {
+@@ -4027,10 +4112,18 @@ class OneServiceImpl : public OneService {
+ 							tc->remoteAddr = addr;
+ 							tc->lastReceive = OSUtils::now();
+ 							tc->parent = this;
+-							tc->sock = (PhySocket*)0;	// set in connect handler
++							tc->sock = (PhySocket*)0;
+ 							tc->messageSize = 0;
+ 							bool connected = false;
+-							_phy.tcpConnect(reinterpret_cast<const struct sockaddr*>(&addr), connected, (void*)tc, true);
++							tc->sock = _phy.tcpConnect(reinterpret_cast<const struct sockaddr*>(&addr), connected, (void*)tc, false);
++							if (! tc->sock) {
++								void* ptr = tc;
++								phyOnTcpClose(nullptr, &ptr);
++							}
++							else if (connected) {
++								void* ptr = tc;
++								phyOnTcpConnect(tc->sock, &ptr, true);
++							}
+ 						}
+ 					}
+ 					_lastSendToGlobalV4 = now;
+@@ -4041,6 +4134,7 @@ class OneServiceImpl : public OneService {
+ 			// Shortcut here so that we don't emit any UDP packets
+ 			return 0;
+ 		}
++		fallbackLock.unlock();
+ #endif	 // ZT_TCP_FALLBACK_RELAY
+ 
+ 		// Even when relaying we still send via UDP. This way if UDP starts
+diff --git a/service/README.md b/service/README.md
+index 5ecbb4e1f..d6557cd08 100644
+--- a/service/README.md
++++ b/service/README.md
+@@ -41,6 +41,7 @@ Settings available in `local.conf` (this is not valid JSON, and JSON does not al
+ 		"allowManagementFrom": [ "NETWORK/bits", ...] |null, /* If non-NULL, allow JSON/HTTP management from this IP network. Default is 127.0.0.1 only. */
+ 		"bind": [ "ip",... ], /* If present and non-null, bind to these IPs instead of to each interface (wildcard IP allowed) */
+ 		"allowTcpFallbackRelay": true|false, /* Allow or disallow establishment of TCP relay connections (true by default) */
++		"directDataOnly": true|false, /* If true, require direct peer paths for data traffic and disable TCP relay (false by default) */
+ 		"enableMetrics": true|false /* If true, enable the collection of metrics in metrics.prom. */
+ 	}
+ }
+-- 
+2.56.1
+

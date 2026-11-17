@@ -1,0 +1,274 @@
+From 5761483ba0c5aec71a76d96cdac168ae1e383d4b Mon Sep 17 00:00:00 2001
+Date: Tue, 17 Nov 2026 16:05:00 +0900
+Subject: [PATCH 1/2] Add direct-only data plane policy
+
+---
+ node/IncomingPacket.cpp |  5 +++-
+ node/IncomingPacket.hpp | 11 +++++++--
+ node/Multicaster.cpp    |  2 +-
+ node/Node.hpp           | 12 ++++++++++
+ node/Packet.hpp         |  5 ++++
+ node/Switch.cpp         | 51 +++++++++++++++++++++++++++++++++--------
+ node/Switch.hpp         |  1 +
+ 7 files changed, 74 insertions(+), 13 deletions(-)
+
+diff --git a/node/IncomingPacket.cpp b/node/IncomingPacket.cpp
+index cf55537a5..fe5b5656a 100644
+--- a/node/IncomingPacket.cpp
++++ b/node/IncomingPacket.cpp
+@@ -77,6 +77,9 @@ bool IncomingPacket::tryDecode(const RuntimeEnvironment* RR, void* tPtr, int32_t
+ 
+ 			_authenticated = true;
+ 			const Packet::Verb v = verb();
++			if (RR->node->directDataOnly() && _relayed && Packet::isDataVerb(v)) {
++				return true;
++			}
+ 
+ 			bool r = true;
+ 			switch (v) {
+@@ -1369,7 +1372,7 @@ bool IncomingPacket::_doMULTICAST_FRAME(const RuntimeEnvironment* RR, void* tPtr
+ 
+ 			const uint8_t* const frameData = (const uint8_t*)field(offset + ZT_PROTO_VERB_MULTICAST_FRAME_IDX_FRAME, frameLen);
+ 
+-			if ((flags & 0x08) && (network->config().isMulticastReplicator(RR->identity.address()))) {
++			if (! RR->node->directDataOnly() && (flags & 0x08) && (network->config().isMulticastReplicator(RR->identity.address()))) {
+ 				RR->mc->send(tPtr, RR->node->now(), network, peer->address(), to, from, etherType, frameData, frameLen);
+ 			}
+ 
+diff --git a/node/IncomingPacket.hpp b/node/IncomingPacket.hpp
+index d75a2928d..15b4481bc 100644
+--- a/node/IncomingPacket.hpp
++++ b/node/IncomingPacket.hpp
+@@ -43,7 +43,7 @@ class Network;
+  */
+ class IncomingPacket : public Packet {
+   public:
+-	IncomingPacket() : Packet(), _receiveTime(0), _path(), _authenticated(false)
++	IncomingPacket() : Packet(), _receiveTime(0), _path(), _authenticated(false), _relayed(false)
+ 	{
+ 	}
+ 
+@@ -56,7 +56,7 @@ class IncomingPacket : public Packet {
+ 	 * @param now Current time
+ 	 * @throws std::out_of_range Range error processing packet
+ 	 */
+-	IncomingPacket(const void* data, unsigned int len, const SharedPtr<Path>& path, int64_t now) : Packet(data, len), _receiveTime(now), _path(path), _authenticated(false)
++	IncomingPacket(const void* data, unsigned int len, const SharedPtr<Path>& path, int64_t now) : Packet(data, len), _receiveTime(now), _path(path), _authenticated(false), _relayed(hops() != 0)
+ 	{
+ 	}
+ 
+@@ -75,6 +75,12 @@ class IncomingPacket : public Packet {
+ 		_receiveTime = now;
+ 		_path = path;
+ 		_authenticated = false;
++		_relayed = (hops() != 0);
++	}
++
++	inline void noteFragment(const Packet::Fragment& fragment)
++	{
++		_relayed |= (fragment.hops() != 0);
+ 	}
+ 
+ 	/**
+@@ -129,6 +135,7 @@ class IncomingPacket : public Packet {
+ 	uint64_t _receiveTime;
+ 	SharedPtr<Path> _path;
+ 	bool _authenticated;
++	bool _relayed;
+ };
+ 
+ }	// namespace ZeroTier
+diff --git a/node/Multicaster.cpp b/node/Multicaster.cpp
+index 5a4d82a83..b566ea347 100644
+--- a/node/Multicaster.cpp
++++ b/node/Multicaster.cpp
+@@ -153,7 +153,7 @@ void Multicaster::send(void* tPtr, int64_t now, const SharedPtr<Network>& networ
+ 	// the current protocol and could be fixed, but fixing it would add more
+ 	// complexity than the fix is probably worth. Bridges are generally high
+ 	// bandwidth nodes.
+-	if (! network->config().isActiveBridge(RR->identity.address())) {
++	if (! RR->node->directDataOnly() && ! network->config().isActiveBridge(RR->identity.address())) {
+ 		Address multicastReplicators[ZT_MAX_NETWORK_SPECIALISTS];
+ 		const unsigned int multicastReplicatorCount = network->config().multicastReplicators(multicastReplicators);
+ 		if (multicastReplicatorCount) {
+diff --git a/node/Node.hpp b/node/Node.hpp
+index 8ea09f551..8ed889095 100644
+--- a/node/Node.hpp
++++ b/node/Node.hpp
+@@ -24,6 +24,7 @@
+ 
+ #include <stdio.h>
+ #include <stdlib.h>
++#include <atomic>
+ #include <vector>
+ 
+ // Bit mask for "expecting reply" hash
+@@ -285,6 +286,16 @@ class Node : public NetworkController::Sender {
+ 		_config.lowBandwidthMode = (int)isEnabled;
+ 	}
+ 
++	inline void setDirectDataOnly(bool enabled)
++	{
++		_directDataOnly.store(enabled);
++	}
++
++	inline bool directDataOnly() const
++	{
++		return _directDataOnly.load();
++	}
++
+ 	inline void setEncryptedHelloEnabled(bool isEnabled)
+ 	{
+ 		_config.enableEncryptedHello = (int)isEnabled;
+@@ -361,6 +372,7 @@ class Node : public NetworkController::Sender {
+ 	volatile int64_t _prngState[2];
+ 	bool _online;
+ 	bool _lowBandwidthMode;
++	std::atomic<bool> _directDataOnly{false};
+ };
+ 
+ }	// namespace ZeroTier
+diff --git a/node/Packet.hpp b/node/Packet.hpp
+index f6b8fdbdc..3a37266b6 100644
+--- a/node/Packet.hpp
++++ b/node/Packet.hpp
+@@ -1018,6 +1018,11 @@ class Packet : public Buffer<ZT_PROTO_MAX_PACKET_LENGTH> {
+ 		VERB_PATH_NEGOTIATION_REQUEST = 0x16
+ 	};
+ 
++	static inline bool isDataVerb(Verb verb)
++	{
++		return verb == VERB_FRAME || verb == VERB_EXT_FRAME || verb == VERB_MULTICAST_FRAME || verb == VERB_USER_MESSAGE;
++	}
++
+ 	/**
+ 	 * Error codes for VERB_ERROR
+ 	 */
+diff --git a/node/Switch.cpp b/node/Switch.cpp
+index efa6c0ba2..2f0982a47 100644
+--- a/node/Switch.cpp
++++ b/node/Switch.cpp
+@@ -134,6 +134,7 @@ void Switch::onRemotePacket(void* tPtr, const int64_t localSocket, const InetAdd
+ 								// We have all fragments -- assemble and process full Packet
+ 
+ 								for (unsigned int f = 1; f < totalFragments; ++f) {
++									rq->frag0.noteFragment(rq->frags[f - 1]);
+ 									rq->frag0.append(rq->frags[f - 1].payload(), rq->frags[f - 1].payloadLength());
+ 								}
+ 
+@@ -222,6 +223,7 @@ void Switch::onRemotePacket(void* tPtr, const int64_t localSocket, const InetAdd
+ 
+ 							rq->frag0.init(data, len, path, now);
+ 							for (unsigned int f = 1; f < rq->totalFragments; ++f) {
++								rq->frag0.noteFragment(rq->frags[f - 1]);
+ 								rq->frag0.append(rq->frags[f - 1].payload(), rq->frags[f - 1].payloadLength());
+ 							}
+ 
+@@ -898,6 +900,12 @@ void Switch::send(void* tPtr, Packet& packet, const bool encrypt, const uint64_t
+ 	}
+ 	_recordOutgoingPacketMetrics(packet);
+ 	if (! _trySend(tPtr, packet, encrypt, nwid, flowId)) {
++		if (RR->node->directDataOnly() && Packet::isDataVerb(packet.verb())) {
++			if (! RR->topology->getPeer(tPtr, dest)) {
++				requestWhois(tPtr, RR->node->now(), dest);
++			}
++			return;
++		}
+ 		{
+ 			Mutex::Lock _l(_txQueue_m);
+ 			if (_txQueue.size() >= ZT_TX_QUEUE_SIZE) {
+@@ -959,7 +967,7 @@ void Switch::doAnythingWaitingForPeer(void* tPtr, const SharedPtr<Peer>& peer)
+ 		Mutex::Lock _l(_txQueue_m);
+ 		for (std::list<TXQueueEntry>::iterator txi(_txQueue.begin()); txi != _txQueue.end();) {
+ 			if (txi->dest == peer->address()) {
+-				if (_trySend(tPtr, txi->packet, txi->encrypt, txi->nwid, txi->flowId)) {
++				if (_trySend(tPtr, txi->packet, txi->encrypt, txi->nwid, txi->flowId) || (RR->node->directDataOnly() && Packet::isDataVerb(txi->packet.verb()))) {
+ 					_txQueue.erase(txi++);
+ 				}
+ 				else {
+@@ -986,7 +994,7 @@ unsigned long Switch::doTimerTasks(void* tPtr, int64_t now)
+ 		Mutex::Lock _l(_txQueue_m);
+ 
+ 		for (std::list<TXQueueEntry>::iterator txi(_txQueue.begin()); txi != _txQueue.end();) {
+-			if (_trySend(tPtr, txi->packet, txi->encrypt, 0, txi->flowId)) {
++			if (_trySend(tPtr, txi->packet, txi->encrypt, 0, txi->flowId) || (RR->node->directDataOnly() && Packet::isDataVerb(txi->packet.verb()))) {
+ 				_txQueue.erase(txi++);
+ 			}
+ 			else if ((now - txi->creationTime) > ZT_TRANSMIT_QUEUE_TIMEOUT) {
+@@ -1058,29 +1066,54 @@ bool Switch::_shouldUnite(const int64_t now, const Address& source, const Addres
+ 	return false;
+ }
+ 
++void Switch::_probeDirectPath(void* tPtr, const SharedPtr<Peer>& peer, uint64_t nwid, int64_t now, int32_t flowId)
++{
++	const SharedPtr<Peer> relay(RR->topology->getUpstreamPeer(nwid));
++	if (relay && relay->address() != peer->address()) {
++		const SharedPtr<Path> relayPath(relay->getAppropriatePath(now, false, flowId));
++		if (relayPath && _shouldUnite(now, RR->identity.address(), peer->address())) {
++			// A relayed HELLO prompts the upstream to introduce both peers.
++			peer->attemptToContactAt(tPtr, relayPath->localSocket(), relayPath->address(), now, true);
++		}
++	}
++}
++
+ bool Switch::_trySend(void* tPtr, Packet& packet, bool encrypt, const uint64_t nwid, const int32_t flowId)
+ {
+ 	SharedPtr<Path> viaPath;
+ 	const int64_t now = RR->node->now();
+ 	const Address destination(packet.destination());
++	const bool directData = RR->node->directDataOnly() && Packet::isDataVerb(packet.verb());
+ 
+ 	const SharedPtr<Peer> peer(RR->topology->getPeer(tPtr, destination));
+ 	if (peer) {
+ 		if ((peer->bondingPolicy() == ZT_BOND_POLICY_BROADCAST) && (packet.verb() == Packet::VERB_FRAME || packet.verb() == Packet::VERB_EXT_FRAME)) {
+ 			const SharedPtr<Peer> relay(RR->topology->getUpstreamPeer(nwid));
+-			Mutex::Lock _l(peer->_paths_m);
+-			for (int i = 0; i < ZT_MAX_PEER_NETWORK_PATHS; ++i) {
+-				if (peer->_paths[i].p && peer->_paths[i].p->alive(now)) {
+-					uint16_t userSpecifiedMtu = peer->_paths[i].p->mtu();
+-					_sendViaSpecificPath(tPtr, peer, peer->_paths[i].p, userSpecifiedMtu, now, packet, encrypt, flowId);
++			bool sent = false;
++			{
++				Mutex::Lock _l(peer->_paths_m);
++				for (int i = 0; i < ZT_MAX_PEER_NETWORK_PATHS; ++i) {
++					if (peer->_paths[i].p && peer->_paths[i].p->alive(now)) {
++						uint16_t userSpecifiedMtu = peer->_paths[i].p->mtu();
++						_sendViaSpecificPath(tPtr, peer, peer->_paths[i].p, userSpecifiedMtu, now, packet, encrypt, flowId);
++						sent = true;
++					}
+ 				}
+ 			}
+-			return true;
++			if (sent || ! directData) {
++				return true;
++			}
+ 		}
+-		else {
++		{
+ 			viaPath = peer->getAppropriatePath(now, false, flowId);
++			if (directData && (! viaPath || ! viaPath->alive(now))) {
++				_probeDirectPath(tPtr, peer, nwid, now, flowId);
++			}
+ 			if (! viaPath) {
+ 				peer->tryMemorizedPath(tPtr, now);	 // periodically attempt memorized or statically defined paths, if any are known
++				if (directData) {
++					return false;
++				}
+ 				const SharedPtr<Peer> relay(RR->topology->getUpstreamPeer(nwid));
+ 				if ((! relay) || (! (viaPath = relay->getAppropriatePath(now, false, flowId)))) {
+ 					if (! (viaPath = peer->getAppropriatePath(now, true, flowId))) {
+diff --git a/node/Switch.hpp b/node/Switch.hpp
+index 7c287f45e..a8b769627 100644
+--- a/node/Switch.hpp
++++ b/node/Switch.hpp
+@@ -199,6 +199,7 @@ class Switch {
+ 
+   private:
+ 	bool _shouldUnite(const int64_t now, const Address& source, const Address& destination);
++	void _probeDirectPath(void* tPtr, const SharedPtr<Peer>& peer, uint64_t nwid, int64_t now, int32_t flowId);
+ 	bool _trySend(void* tPtr, Packet& packet, bool encrypt, const uint64_t nwid, const int32_t flowId /* = ZT_QOS_NO_FLOW*/);
+ 	void _sendViaSpecificPath(void* tPtr, SharedPtr<Peer> peer, SharedPtr<Path> viaPath, uint16_t userSpecifiedMtu, int64_t now, Packet& packet, bool encrypt, int32_t flowId);
+ 	void _recordOutgoingPacketMetrics(const Packet& p);
+-- 
+2.56.1
+
